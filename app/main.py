@@ -36,9 +36,11 @@ app = FastAPI(
 # CORS middleware
 # Allow specific origins for security
 allowed_origins = [
+    "http://localhost:8000",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
+    "http://127.0.0.1:8000",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:8080",
@@ -53,6 +55,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["*"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 # ============================================================================
@@ -1335,9 +1338,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     
     # Check if origin is in allowed list
     allowed_origins = [
+        "http://localhost:8000",
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8080",
+        "http://127.0.0.1:8000",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:8080",
