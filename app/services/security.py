@@ -122,7 +122,7 @@ class SecurityService:
         # Basic format validation per exchange
         exchange_formats = {
             "binance": lambda k: len(k) >= 64,  # Binance keys are typically 64 chars
-            "alpaca": lambda k: k.startswith("PK") or k.startswith("AK"),  # Alpaca format
+            "alpaca": lambda k: (k.startswith("PK") or k.startswith("AK")) and len(k) >= 20,  # Alpaca format
             "bybit": lambda k: len(k) >= 32,
         }
         
@@ -130,7 +130,7 @@ class SecurityService:
         if validator:
             return validator(api_key)
         
-        # Default: at least 20 characters
+        # Default: at least 20 characters (more strict)
         return len(api_key) >= 20
     
     @staticmethod

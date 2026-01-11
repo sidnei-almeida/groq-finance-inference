@@ -9,7 +9,7 @@ import json
 import time
 from typing import Dict, Any
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "https://groq-finance-inference.onrender.com"
 
 class Colors:
     GREEN = '\033[92m'

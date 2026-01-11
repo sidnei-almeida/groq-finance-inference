@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 import uvicorn
 
 from app.services.database import get_db
@@ -66,10 +66,16 @@ class StrategyConfig(BaseModel):
 
 class PortfolioAnalysisRequest(BaseModel):
     """Request for portfolio analysis"""
-    symbols: List[str] = Field(..., description="List of asset symbols")
+    symbols: List[str] = Field(..., min_length=1, description="List of asset symbols (at least 1 required)")
     weights: Optional[List[float]] = Field(None, description="Portfolio weights (must sum to 1.0)")
     period: str = Field("1y", description="Analysis period (1d, 1mo, 3mo, 6mo, 1y, 2y, 5y)")
     include_ai_analysis: bool = Field(True, description="Include Atlas AI analysis")
+    
+    @validator('symbols')
+    def validate_symbols_not_empty(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError('At least one symbol is required')
+        return v
 
 class AgentControl(BaseModel):
     """Agent control commands"""
