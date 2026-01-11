@@ -28,3 +28,4 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+API_INTEGRATION_GUIDE.txt
