@@ -6,9 +6,10 @@ All state stored in database. API is stateless.
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator, EmailStr
 import uvicorn
 
@@ -33,12 +34,25 @@ app = FastAPI(
 )
 
 # CORS middleware
+# Allow specific origins for security
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8080",
+    "https://sidnei-almeida.github.io",
+    "https://groq-finance-inference.onrender.com",  # Allow API to call itself
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # ============================================================================
@@ -508,7 +522,14 @@ async def upload_avatar(
         
         import base64
         import io
-        from PIL import Image
+        
+        # Try to import PIL, handle gracefully if not available
+        try:
+            from PIL import Image
+            PIL_AVAILABLE = True
+        except ImportError:
+            PIL_AVAILABLE = False
+            logger.warning("Pillow not available, storing image as-is without processing")
         
         # Extract base64 data (handle data:image/...;base64, prefix)
         if "," in request.avatar:
@@ -520,6 +541,7 @@ async def upload_avatar(
         try:
             image_data = base64.b64decode(base64_data)
         except Exception as e:
+            logger.error(f"Base64 decode error: {str(e)}")
             raise HTTPException(
                 status_code=400,
                 detail={"status": "error", "message": "Invalid base64 image data"}
@@ -532,48 +554,50 @@ async def upload_avatar(
                 detail={"status": "error", "message": "Image size exceeds 5MB limit"}
             )
         
-        # Validate and process image
-        try:
-            image = Image.open(io.BytesIO(image_data))
-            image.verify()  # Verify it's a valid image
-            
-            # Reopen for processing (verify() closes the image)
-            image = Image.open(io.BytesIO(image_data))
-            
-            # Validate format
-            if image.format not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"status": "error", "message": f"Unsupported image format: {image.format}. Supported: JPEG, PNG, WebP, GIF"}
-                )
-            
-            # Resize to 400x400 (maintain aspect ratio)
-            image.thumbnail((400, 400), Image.Resampling.LANCZOS)
-            
-            # Convert back to base64
-            buffer = io.BytesIO()
-            # Convert RGBA to RGB if necessary (for PNG with transparency)
-            if image.format == 'PNG' and image.mode == 'RGBA':
-                # Create white background
-                background = Image.new('RGB', image.size, (255, 255, 255))
-                background.paste(image, mask=image.split()[3])  # Use alpha channel as mask
-                image = background
-            
-            image.save(buffer, format='JPEG', quality=85, optimize=True)
-            buffer.seek(0)
-            processed_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            
-            # Store as data URI
-            avatar_url = f"data:image/jpeg;base64,{processed_base64}"
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error processing image: {str(e)}")
-            raise HTTPException(
-                status_code=400,
-                detail={"status": "error", "message": "Invalid image format"}
-            )
+        # Process image if Pillow is available, otherwise store as-is
+        if PIL_AVAILABLE:
+            try:
+                image = Image.open(io.BytesIO(image_data))
+                image.verify()  # Verify it's a valid image
+                
+                # Reopen for processing (verify() closes the image)
+                image = Image.open(io.BytesIO(image_data))
+                
+                # Validate format
+                if image.format not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"status": "error", "message": f"Unsupported image format: {image.format}. Supported: JPEG, PNG, WebP, GIF"}
+                    )
+                
+                # Resize to 400x400 (maintain aspect ratio)
+                image.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                
+                # Convert back to base64
+                buffer = io.BytesIO()
+                # Convert RGBA to RGB if necessary (for PNG with transparency)
+                if image.format == 'PNG' and image.mode == 'RGBA':
+                    # Create white background
+                    background = Image.new('RGB', image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[3])  # Use alpha channel as mask
+                    image = background
+                
+                image.save(buffer, format='JPEG', quality=85, optimize=True)
+                buffer.seek(0)
+                processed_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                
+                # Store as data URI
+                avatar_url = f"data:image/jpeg;base64,{processed_base64}"
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error processing image with Pillow: {str(e)}")
+                # Fallback: store original image if processing fails
+                avatar_url = request.avatar
+        else:
+            # Pillow not available, store original base64
+            avatar_url = request.avatar
         
         # Update user avatar
         db = get_db()
@@ -1296,6 +1320,48 @@ async def startup_event():
         logger.info("Database connection established")
     except Exception as e:
         logger.error(f"Failed to initialize database: {str(e)}")
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to ensure CORS headers are always present."""
+    # Don't handle HTTPException (FastAPI handles those)
+    if isinstance(exc, HTTPException):
+        raise exc
+    
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    
+    # Get origin from request
+    origin = request.headers.get("origin", "*")
+    
+    # Check if origin is in allowed list
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8080",
+        "https://sidnei-almeida.github.io",
+        "https://groq-finance-inference.onrender.com",
+    ]
+    
+    # Use origin if allowed, otherwise use first allowed origin
+    cors_origin = origin if origin in allowed_origins else allowed_origins[0] if allowed_origins else "*"
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": "Internal server error",
+            "detail": str(exc) if logger.level == logging.DEBUG else None
+        },
+        headers={
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 @app.on_event("shutdown")
 async def shutdown_event():
