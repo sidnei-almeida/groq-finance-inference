@@ -6,7 +6,7 @@ All state stored in database. API is stateless.
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
@@ -501,13 +501,13 @@ async def update_profile(
 
 @app.post("/api/auth/upload-avatar", tags=["Authentication"])
 async def upload_avatar(
-    request: UploadAvatarRequest,
+    file: UploadFile = File(...),
     current_user: Optional[Dict] = Depends(get_current_user)
 ):
     """
     Upload user avatar image.
     
-    Accepts base64 encoded images (JPEG, PNG, WebP, GIF).
+    Accepts image files (JPEG, PNG, WebP, GIF) via multipart/form-data.
     Max size: 5MB. Images are resized to 400x400px.
     
     Returns:
@@ -534,37 +534,39 @@ async def upload_avatar(
             PIL_AVAILABLE = False
             logger.warning("Pillow not available, storing image as-is without processing")
         
-        # Extract base64 data (handle data:image/...;base64, prefix)
-        if "," in request.avatar:
-            header, base64_data = request.avatar.split(",", 1)
-        else:
-            base64_data = request.avatar
-        
-        # Decode base64
+        # Read file content
         try:
-            image_data = base64.b64decode(base64_data)
+            file_content = await file.read()
         except Exception as e:
-            logger.error(f"Base64 decode error: {str(e)}")
+            logger.error(f"Error reading file: {str(e)}")
             raise HTTPException(
                 status_code=400,
-                detail={"status": "error", "message": "Invalid base64 image data"}
+                detail={"status": "error", "message": "Failed to read uploaded file"}
             )
         
-        # Validate image size (max 5MB)
-        if len(image_data) > 5 * 1024 * 1024:
+        # Validate file size (max 5MB)
+        if len(file_content) > 5 * 1024 * 1024:
             raise HTTPException(
                 status_code=413,
                 detail={"status": "error", "message": "Image size exceeds 5MB limit"}
             )
         
+        # Validate content type
+        content_type = file.content_type
+        if content_type and not content_type.startswith('image/'):
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": f"Invalid file type: {content_type}. Only image files are allowed."}
+            )
+        
         # Process image if Pillow is available, otherwise store as-is
         if PIL_AVAILABLE:
             try:
-                image = Image.open(io.BytesIO(image_data))
+                image = Image.open(io.BytesIO(file_content))
                 image.verify()  # Verify it's a valid image
                 
                 # Reopen for processing (verify() closes the image)
-                image = Image.open(io.BytesIO(image_data))
+                image = Image.open(io.BytesIO(file_content))
                 
                 # Validate format
                 if image.format not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
@@ -596,11 +598,16 @@ async def upload_avatar(
                 raise
             except Exception as e:
                 logger.error(f"Error processing image with Pillow: {str(e)}")
-                # Fallback: store original image if processing fails
-                avatar_url = request.avatar
+                # Fallback: convert original to base64
+                base64_data = base64.b64encode(file_content).decode('utf-8')
+                # Determine MIME type
+                mime_type = content_type or 'image/jpeg'
+                avatar_url = f"data:{mime_type};base64,{base64_data}"
         else:
-            # Pillow not available, store original base64
-            avatar_url = request.avatar
+            # Pillow not available, convert to base64
+            base64_data = base64.b64encode(file_content).decode('utf-8')
+            mime_type = content_type or 'image/jpeg'
+            avatar_url = f"data:{mime_type};base64,{base64_data}"
         
         # Update user avatar
         db = get_db()
@@ -624,10 +631,10 @@ async def upload_avatar(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error uploading avatar: {str(e)}")
+        logger.error(f"Error uploading avatar: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={"status": "error", "message": "Failed to upload avatar"}
+            detail={"status": "error", "message": f"Failed to upload avatar: {str(e)}"}
         )
 
 @app.post("/api/auth/update-password", tags=["Authentication"])
