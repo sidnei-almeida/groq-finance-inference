@@ -6,15 +6,17 @@ All state stored in database. API is stateless.
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, validator, EmailStr
 import uvicorn
 
 from app.services.database import get_db
 from app.services.quant_engine import QuantitativeEngine
 from app.services.ai_agent import AtlasAgent
 from app.services.security import get_security_service
+from app.services.auth import get_auth_service, AuthService
 
 # Configure logging
 logging.basicConfig(
@@ -59,7 +61,7 @@ class GuardRails(BaseModel):
 
 class StrategyConfig(BaseModel):
     """Trading strategy configuration"""
-    mode: str = Field(..., description="Strategy mode: 'conservative' or 'aggressive'")
+    mode: str = Field(..., description="Strategy mode: 'conservative', 'moderate', or 'aggressive'")
     risk_per_trade: float = Field(0.01, description="Risk per trade (0.01 = 1%)")
     take_profit_pct: Optional[float] = Field(None, description="Take profit percentage")
     stop_loss_pct: Optional[float] = Field(None, description="Stop loss percentage")
@@ -114,6 +116,254 @@ class StatusResponse(BaseModel):
     daily_pnl: Optional[float]
     open_positions: int
     last_update: datetime
+
+# Authentication models
+class SignupRequest(BaseModel):
+    """User signup request"""
+    email: EmailStr = Field(..., description="User email")
+    password: str = Field(..., min_length=8, description="Password (minimum 8 characters)")
+    full_name: str = Field(..., min_length=1, description="User's full name")
+    
+    @validator('password')
+    def validate_password_length(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
+        return v
+
+class LoginRequest(BaseModel):
+    """User login request"""
+    email: EmailStr = Field(..., description="User email")
+    password: str = Field(..., description="Password")
+
+# HTTP Bearer token security
+security_scheme = HTTPBearer(auto_error=False)
+
+# ============================================================================
+# AUTHENTICATION ENDPOINTS
+# ============================================================================
+
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)
+) -> Optional[Dict]:
+    """
+    Optional authentication dependency.
+    Returns user dict if token is valid, None otherwise.
+    """
+    if not credentials:
+        return None
+    
+    try:
+        auth_service = get_auth_service()
+        user_id = auth_service.get_user_id_from_token(credentials.credentials)
+        
+        if user_id:
+            db = get_db()
+            user = db.get_user_by_id(user_id)
+            return user
+        return None
+    except Exception as e:
+        logger.warning(f"Authentication error: {str(e)}")
+        return None
+
+@app.post("/api/auth/signup", tags=["Authentication"], status_code=201)
+async def signup(request: SignupRequest):
+    """
+    Create a new user account.
+    
+    Returns:
+        201 Created: User created successfully
+        400 Bad Request: Email already exists or validation error
+    """
+    try:
+        db = get_db()
+        auth_service = get_auth_service()
+        
+        # Check if email already exists
+        existing_user = db.get_user_by_email(request.email)
+        if existing_user:
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Email already exists"}
+            )
+        
+        # Hash password
+        password_hash = auth_service.hash_password(request.password)
+        
+        # Create user
+        user = db.create_user(
+            email=request.email,
+            password_hash=password_hash,
+            full_name=request.full_name
+        )
+        
+        return {
+            "status": "success",
+            "message": "User created successfully",
+            "user": {
+                "id": user["id"],
+                "email": user["email"],
+                "full_name": user["full_name"],
+                "created_at": user["created_at"].isoformat() if isinstance(user["created_at"], datetime) else str(user["created_at"])
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating user: {str(e)}")
+        if "already exists" in str(e).lower():
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Email already exists"}
+            )
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to create user"}
+        )
+
+@app.post("/api/auth/login", tags=["Authentication"])
+async def login(request: LoginRequest):
+    """
+    Authenticate user and return JWT token.
+    
+    Returns:
+        200 OK: Login successful with token
+        401 Unauthorized: Invalid credentials
+    """
+    try:
+        db = get_db()
+        auth_service = get_auth_service()
+        
+        # Get user by email
+        user = db.get_user_by_email(request.email)
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail={"status": "error", "message": "Invalid email or password"}
+            )
+        
+        # Verify password
+        if not auth_service.verify_password(request.password, user["password_hash"]):
+            raise HTTPException(
+                status_code=401,
+                detail={"status": "error", "message": "Invalid email or password"}
+            )
+        
+        # Check if user is active
+        if not user.get("is_active", True):
+            raise HTTPException(
+                status_code=401,
+                detail={"status": "error", "message": "Account is inactive"}
+            )
+        
+        # Update last login
+        db.update_user_last_login(user["id"])
+        
+        # Create JWT token
+        token_data = {
+            "sub": str(user["id"]),
+            "email": user["email"]
+        }
+        token = auth_service.create_access_token(token_data)
+        
+        # Create session (optional)
+        from datetime import timedelta
+        expires_at = datetime.utcnow() + timedelta(days=30)
+        try:
+            db.create_session(
+                user_id=user["id"],
+                token=token,
+                expires_at=expires_at
+            )
+        except Exception as e:
+            logger.warning(f"Could not create session: {str(e)}")
+        
+        return {
+            "status": "success",
+            "token": token,
+            "user": {
+                "id": user["id"],
+                "email": user["email"],
+                "full_name": user["full_name"],
+                "created_at": user["created_at"].isoformat() if isinstance(user["created_at"], datetime) else str(user["created_at"]),
+                "updated_at": user["updated_at"].isoformat() if isinstance(user["updated_at"], datetime) else str(user["updated_at"]) if user.get("updated_at") else None,
+                "last_login": datetime.utcnow().isoformat()
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during login: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to authenticate"}
+        )
+
+@app.post("/api/auth/logout", tags=["Authentication"])
+async def logout(current_user: Optional[Dict] = Depends(get_current_user)):
+    """
+    Logout user and invalidate sessions.
+    
+    Returns:
+        200 OK: Logout successful
+        401 Unauthorized: Invalid token
+    """
+    try:
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token"
+            )
+        
+        db = get_db()
+        db.deactivate_user_sessions(current_user["id"])
+        
+        return {
+            "status": "success",
+            "message": "Logged out successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during logout: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to logout"}
+        )
+
+@app.get("/api/auth/me", tags=["Authentication"])
+async def get_current_user_info(current_user: Optional[Dict] = Depends(get_current_user)):
+    """
+    Get current authenticated user information.
+    
+    Returns:
+        200 OK: User information
+        401 Unauthorized: Invalid token or user not found
+    """
+    try:
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token"
+            )
+        
+        return {
+            "user": {
+                "id": current_user["id"],
+                "email": current_user["email"],
+                "full_name": current_user["full_name"],
+                "created_at": current_user["created_at"].isoformat() if isinstance(current_user["created_at"], datetime) else str(current_user["created_at"]),
+                "updated_at": current_user["updated_at"].isoformat() if isinstance(current_user["updated_at"], datetime) else str(current_user["updated_at"]) if current_user.get("updated_at") else None,
+                "last_login": current_user["last_login"].isoformat() if isinstance(current_user.get("last_login"), datetime) else str(current_user["last_login"]) if current_user.get("last_login") else None
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting user info: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to get user"}
+        )
 
 # ============================================================================
 # EXCHANGE CONNECTION ENDPOINTS
@@ -281,22 +531,46 @@ async def get_guardrails():
 async def set_strategy(strategy: StrategyConfig):
     """
     Set trading strategy configuration.
-    Modes: 'conservative' (safer, fewer trades) or 'aggressive' (more trades, higher risk)
+    Modes: 'conservative', 'moderate', or 'aggressive'
     """
     try:
         db = get_db()
         
-        if strategy.mode not in ["conservative", "aggressive"]:
-            raise HTTPException(status_code=400, detail="Mode must be 'conservative' or 'aggressive'")
+        if strategy.mode not in ["conservative", "moderate", "aggressive"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Mode must be 'conservative', 'moderate', or 'aggressive'"
+            )
+        
+        # Validate risk_per_trade
+        if not (0 < strategy.risk_per_trade <= 1):
+            raise HTTPException(
+                status_code=400,
+                detail="risk_per_trade must be between 0 and 1 (0.01 = 1%)"
+            )
         
         db.set_config("strategy_mode", strategy.mode)
         db.set_config("risk_per_trade", str(strategy.risk_per_trade))
         
-        if strategy.take_profit_pct:
+        if strategy.take_profit_pct is not None:
             db.set_config("take_profit_pct", str(strategy.take_profit_pct))
+        else:
+            # Delete if None
+            try:
+                db.delete_config("take_profit_pct")
+            except:
+                pass
         
-        if strategy.stop_loss_pct:
+        if strategy.stop_loss_pct is not None:
             db.set_config("stop_loss_pct", str(strategy.stop_loss_pct))
+        else:
+            # Delete if None
+            try:
+                db.delete_config("stop_loss_pct")
+            except:
+                pass
+        
+        db.add_bot_log(f"Strategy updated: {strategy.mode}", "INFO")
         
         return {
             "status": "saved",
@@ -307,6 +581,8 @@ async def set_strategy(strategy: StrategyConfig):
                 "stop_loss_pct": strategy.stop_loss_pct
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error setting strategy: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -460,16 +736,19 @@ async def control_agent(control: AgentControl):
                 raise HTTPException(status_code=400, detail="Exchange not connected")
             
             db.set_config("agent_status", "running")
-            db.set_config("agent_started_at", datetime.now().isoformat())
+            started_at = datetime.utcnow()
+            db.set_config("agent_started_at", started_at.isoformat() + "Z")
+            db.add_bot_log("Agent started successfully", "INFO")
             
             return {
                 "status": "started",
                 "message": "Agent started successfully",
-                "started_at": datetime.now().isoformat()
+                "started_at": started_at.isoformat() + "Z"
             }
         
         elif control.action == "stop":
             db.set_config("agent_status", "stopped")
+            db.add_bot_log("Agent stopped successfully", "INFO")
             
             return {
                 "status": "stopped",
@@ -478,16 +757,19 @@ async def control_agent(control: AgentControl):
         
         elif control.action == "emergency_stop":
             db.set_config("agent_status", "emergency_stopped")
+            db.add_bot_log("EMERGENCY STOP activated", "ERROR")
             
+            positions_closed = False
             if control.close_all_positions:
                 # In production, this would close all open positions
                 # For now, just log it
                 db.add_bot_log("EMERGENCY STOP: Closing all positions", "ERROR")
+                positions_closed = True
             
             return {
                 "status": "emergency_stopped",
                 "message": "Emergency stop activated",
-                "positions_closed": control.close_all_positions
+                "positions_closed": positions_closed
             }
         
         else:
@@ -508,18 +790,39 @@ async def get_agent_status():
         agent_status = db.get_config("agent_status", "stopped")
         exchange_connected = db.get_config("exchange_connected", "false") == "true"
         
-        # Get open trades count (from trades table - if it exists)
-        # For now, return placeholder
-        open_positions = 0
+        # Get open trades count
+        open_trades = db.get_trades(status="OPEN", limit=1000)
+        open_positions = len(open_trades)
         
-        return StatusResponse(
-            agent_status=agent_status,
-            exchange_connected=exchange_connected,
-            balance=None,  # Would fetch from exchange in production
-            daily_pnl=None,  # Would calculate from trades
-            open_positions=open_positions,
-            last_update=datetime.now()
-        )
+        # Calculate daily PnL (sum of pnl for trades closed today)
+        daily_pnl = None
+        if exchange_connected:
+            try:
+                from datetime import date
+                today = date.today()
+                all_trades = db.get_trades(status="CLOSED", limit=1000)
+                daily_pnl = sum(
+                    float(trade.get("pnl", 0) or 0)
+                    for trade in all_trades
+                    if trade.get("exit_time") and 
+                    datetime.fromisoformat(str(trade["exit_time"]).replace("Z", "+00:00")).date() == today
+                )
+                if daily_pnl == 0:
+                    daily_pnl = None
+            except Exception as e:
+                logger.warning(f"Could not calculate daily PnL: {str(e)}")
+        
+        # Get balance (would fetch from exchange in production)
+        balance = None
+        
+        return {
+            "agent_status": agent_status,
+            "exchange_connected": exchange_connected,
+            "balance": balance,
+            "daily_pnl": daily_pnl,
+            "open_positions": open_positions,
+            "last_update": datetime.utcnow().isoformat() + "Z"
+        }
     except Exception as e:
         logger.error(f"Error getting agent status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -533,11 +836,36 @@ async def get_trades(status: Optional[str] = None, limit: int = 100):
     """
     Get trades from database.
     Thin client: Frontend just queries this endpoint.
+    Returns trades ordered by entry_time DESC (newest first).
     """
     try:
         db = get_db()
         trades = db.get_trades(status=status, limit=limit)
-        return trades
+        
+        # Convert timestamps to ISO format strings
+        result = []
+        for trade in trades:
+            trade_dict = dict(trade)
+            # Convert entry_time
+            if isinstance(trade_dict.get("entry_time"), datetime):
+                trade_dict["entry_time"] = trade_dict["entry_time"].isoformat() + "Z"
+            elif trade_dict.get("entry_time"):
+                ts = str(trade_dict["entry_time"])
+                if not ts.endswith("Z") and "+" not in ts:
+                    trade_dict["entry_time"] = ts + "Z"
+            
+            # Convert exit_time
+            if trade_dict.get("exit_time"):
+                if isinstance(trade_dict["exit_time"], datetime):
+                    trade_dict["exit_time"] = trade_dict["exit_time"].isoformat() + "Z"
+                else:
+                    ts = str(trade_dict["exit_time"])
+                    if not ts.endswith("Z") and "+" not in ts:
+                        trade_dict["exit_time"] = ts + "Z"
+            
+            result.append(trade_dict)
+        
+        return result
     except Exception as e:
         logger.error(f"Error fetching trades: {str(e)}")
         return []
@@ -552,15 +880,30 @@ async def get_open_trades():
 # ============================================================================
 
 @app.get("/api/logs", tags=["Logs"])
-async def get_logs(limit: int = 100, level: Optional[str] = None):
+async def get_logs(limit: int = 50, level: Optional[str] = None):
     """
     Get system logs from database.
     Thin client: Frontend displays these in real-time.
+    Returns logs ordered by timestamp DESC (newest first).
     """
     try:
         db = get_db()
         logs = db.get_bot_logs(level=level, limit=limit)
-        return logs
+        
+        # Convert timestamps to ISO format strings
+        result = []
+        for log in logs:
+            log_dict = dict(log)
+            if isinstance(log_dict.get("timestamp"), datetime):
+                log_dict["timestamp"] = log_dict["timestamp"].isoformat() + "Z"
+            elif log_dict.get("timestamp"):
+                # Already a string, ensure it has Z suffix
+                ts = str(log_dict["timestamp"])
+                if not ts.endswith("Z") and "+" not in ts:
+                    log_dict["timestamp"] = ts + "Z"
+            result.append(log_dict)
+        
+        return result
     except Exception as e:
         logger.error(f"Error fetching logs: {str(e)}")
         return []
@@ -574,6 +917,7 @@ async def get_portfolio_history(days: int = 30, symbols: Optional[str] = None):
     """
     Get portfolio history for charts.
     Thin client: Frontend uses this to draw performance charts.
+    Returns history ordered by timestamp ASC (oldest first, for charting).
     """
     try:
         db = get_db()
@@ -581,7 +925,19 @@ async def get_portfolio_history(days: int = 30, symbols: Optional[str] = None):
         symbol_list = symbols.split(",") if symbols else None
         history = db.get_portfolio_history(symbols=symbol_list, days=days)
         
-        return history
+        # Convert timestamps to ISO format strings
+        result = []
+        for entry in history:
+            entry_dict = dict(entry)
+            if isinstance(entry_dict.get("timestamp"), datetime):
+                entry_dict["timestamp"] = entry_dict["timestamp"].isoformat() + "Z"
+            elif entry_dict.get("timestamp"):
+                ts = str(entry_dict["timestamp"])
+                if not ts.endswith("Z") and "+" not in ts:
+                    entry_dict["timestamp"] = ts + "Z"
+            result.append(entry_dict)
+        
+        return result
     except Exception as e:
         logger.error(f"Error fetching portfolio history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

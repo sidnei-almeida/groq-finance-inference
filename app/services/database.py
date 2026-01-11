@@ -205,6 +205,58 @@ class DatabaseService:
                         );
                     """)
                     
+                    # Create users table for authentication
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS users (
+                            id SERIAL PRIMARY KEY,
+                            email VARCHAR(255) UNIQUE NOT NULL,
+                            password_hash VARCHAR(255) NOT NULL,
+                            full_name VARCHAR(255) NOT NULL,
+                            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                            last_login TIMESTAMPTZ,
+                            is_active BOOLEAN DEFAULT TRUE,
+                            email_verified BOOLEAN DEFAULT FALSE,
+                            verification_token VARCHAR(255),
+                            reset_token VARCHAR(255),
+                            reset_token_expires TIMESTAMPTZ
+                        );
+                    """)
+                    
+                    # Create user_sessions table for token management
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS user_sessions (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                            token VARCHAR(255) UNIQUE NOT NULL,
+                            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMPTZ NOT NULL,
+                            ip_address VARCHAR(45),
+                            user_agent TEXT,
+                            is_active BOOLEAN DEFAULT TRUE
+                        );
+                    """)
+                    
+                    # Create trigger function for updating updated_at
+                    cur.execute("""
+                        CREATE OR REPLACE FUNCTION update_updated_at_column()
+                        RETURNS TRIGGER AS $$
+                        BEGIN
+                            NEW.updated_at = CURRENT_TIMESTAMP;
+                            RETURN NEW;
+                        END;
+                        $$ language 'plpgsql';
+                    """)
+                    
+                    # Create trigger for users table
+                    cur.execute("""
+                        DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+                        CREATE TRIGGER update_users_updated_at
+                        BEFORE UPDATE ON users
+                        FOR EACH ROW
+                        EXECUTE FUNCTION update_updated_at_column();
+                    """)
+                    
                     # Seed initial config if not exists
                     cur.execute("""
                         INSERT INTO app_config (key, value) 
@@ -257,6 +309,16 @@ class DatabaseService:
             
             # Encrypted credentials indexes
             ("CREATE INDEX IF NOT EXISTS idx_encrypted_credentials_exchange ON encrypted_credentials(exchange)",),
+            
+            # Users indexes
+            ("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",),
+            ("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)",),
+            ("CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active)",),
+            
+            # User sessions indexes
+            ("CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id)",),
+            ("CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token)",),
+            ("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at)",),
         ]
         
         for index_sql in indexes:
@@ -653,6 +715,26 @@ class DatabaseService:
             logger.error(f"Error setting config: {str(e)}")
             raise
     
+    def delete_config(self, key: str):
+        """
+        Delete a configuration value.
+        
+        Args:
+            key: Configuration key to delete
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        DELETE FROM app_config
+                        WHERE key = %s;
+                    """, (key,))
+                    conn.commit()
+            logger.info(f"Config deleted: {key}")
+        except Exception as e:
+            logger.error(f"Error deleting config: {str(e)}")
+            raise
+    
     def save_encrypted_credential(
         self,
         exchange: str,
@@ -900,6 +982,168 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Error fetching bot logs: {str(e)}")
             return []
+    
+    # ============================================================================
+    # AUTHENTICATION METHODS
+    # ============================================================================
+    
+    def create_user(self, email: str, password_hash: str, full_name: str) -> Dict:
+        """
+        Create a new user.
+        
+        Args:
+            email: User email (must be unique)
+            password_hash: Hashed password
+            full_name: User's full name
+        
+        Returns:
+            User dictionary (without password_hash)
+        
+        Raises:
+            Exception: If email already exists
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        INSERT INTO users (email, password_hash, full_name)
+                        VALUES (%s, %s, %s)
+                        RETURNING id, email, full_name, created_at, updated_at, last_login, is_active;
+                    """, (email.lower(), password_hash, full_name))
+                    
+                    user = dict(cur.fetchone())
+                    conn.commit()
+                    logger.info(f"User created: {email}")
+                    return user
+        except psycopg2.IntegrityError as e:
+            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+                raise Exception("Email already exists")
+            raise
+        except Exception as e:
+            logger.error(f"Error creating user: {str(e)}")
+            raise
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """
+        Get user by email.
+        
+        Args:
+            email: User email
+        
+        Returns:
+            User dictionary (with password_hash) or None
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT id, email, password_hash, full_name, created_at, updated_at, last_login, is_active
+                        FROM users
+                        WHERE email = %s;
+                    """, (email.lower(),))
+                    
+                    row = cur.fetchone()
+                    if row:
+                        return dict(row)
+                    return None
+        except Exception as e:
+            logger.error(f"Error fetching user: {str(e)}")
+            return None
+    
+    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """
+        Get user by ID.
+        
+        Args:
+            user_id: User ID
+        
+        Returns:
+            User dictionary (without password_hash) or None
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT id, email, full_name, created_at, updated_at, last_login, is_active
+                        FROM users
+                        WHERE id = %s AND is_active = TRUE;
+                    """, (user_id,))
+                    
+                    row = cur.fetchone()
+                    if row:
+                        return dict(row)
+                    return None
+        except Exception as e:
+            logger.error(f"Error fetching user: {str(e)}")
+            return None
+    
+    def update_user_last_login(self, user_id: int):
+        """
+        Update user's last login timestamp.
+        
+        Args:
+            user_id: User ID
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE users
+                        SET last_login = NOW()
+                        WHERE id = %s;
+                    """, (user_id,))
+                    conn.commit()
+        except Exception as e:
+            logger.warning(f"Error updating last login: {str(e)}")
+    
+    def create_session(self, user_id: int, token: str, expires_at: datetime, 
+                      ip_address: Optional[str] = None, user_agent: Optional[str] = None) -> int:
+        """
+        Create a user session.
+        
+        Args:
+            user_id: User ID
+            token: JWT token string
+            expires_at: Token expiration datetime
+            ip_address: Optional IP address
+            user_agent: Optional user agent string
+        
+        Returns:
+            Session ID
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO user_sessions (user_id, token, expires_at, ip_address, user_agent)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id;
+                    """, (user_id, token, expires_at, ip_address, user_agent))
+                    session_id = cur.fetchone()[0]
+                    conn.commit()
+                    return session_id
+        except Exception as e:
+            logger.error(f"Error creating session: {str(e)}")
+            raise
+    
+    def deactivate_user_sessions(self, user_id: int):
+        """
+        Deactivate all sessions for a user.
+        
+        Args:
+            user_id: User ID
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE user_sessions
+                        SET is_active = FALSE
+                        WHERE user_id = %s AND is_active = TRUE;
+                    """, (user_id,))
+                    conn.commit()
+        except Exception as e:
+            logger.warning(f"Error deactivating sessions: {str(e)}")
     
     def close(self):
         """Close all database connections."""
