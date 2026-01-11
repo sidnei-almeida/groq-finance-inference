@@ -29,3 +29,4 @@ ENV/
 .DS_Store
 Thumbs.db
 API_INTEGRATION_GUIDE.txt
+PROFILE_API_GUIDE.md
