@@ -192,7 +192,7 @@ python3 -c "from app.services.security import SecurityService; print(SecuritySer
    - Wait for "Live" status
    - Test health endpoint:
      ```bash
-     curl https://your-app.onrender.com/api/health
+     curl https://groq-finance-inference.onrender.com/api/health
      ```
 
 ---

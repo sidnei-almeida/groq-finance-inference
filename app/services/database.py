@@ -6,6 +6,7 @@ Thin client architecture: All state stored in database.
 import os
 import logging
 import json
+import math
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import psycopg2
@@ -23,6 +24,29 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def clean_json_for_db(data: Any) -> Any:
+    """
+    Clean data for JSONB storage by replacing NaN/Inf with None.
+    PostgreSQL JSONB doesn't support NaN or Infinity.
+    
+    Args:
+        data: Data structure (dict, list, or primitive)
+    
+    Returns:
+        Cleaned data structure
+    """
+    if isinstance(data, dict):
+        return {k: clean_json_for_db(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_json_for_db(item) for item in data]
+    elif isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return None
+        return data
+    else:
+        return data
 
 
 class DatabaseService:
@@ -323,6 +347,9 @@ class DatabaseService:
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
+                    # Clean metrics to remove NaN/Inf values (PostgreSQL JSONB doesn't support them)
+                    cleaned_metrics = clean_json_for_db(metrics)
+                    
                     cur.execute("""
                         INSERT INTO portfolio_analyses 
                         (symbols, weights, period, metrics, ai_analysis, status, completed_at)
@@ -332,7 +359,7 @@ class DatabaseService:
                         symbols,
                         weights,
                         period,
-                        json.dumps(metrics),
+                        json.dumps(cleaned_metrics),
                         ai_analysis,
                         status
                     ))

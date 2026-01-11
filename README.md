@@ -183,10 +183,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 #### 6. Access API
 
-- **API Base URL**: http://localhost:8000
-- **Interactive Docs**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **Health Check**: http://localhost:8000/api/health
+- **API Base URL**: https://groq-finance-inference.onrender.com
+- **Interactive Docs**: https://groq-finance-inference.onrender.com/docs
+- **ReDoc**: https://groq-finance-inference.onrender.com/redoc
+- **Health Check**: https://groq-finance-inference.onrender.com/api/health
 
 ---
 
@@ -195,7 +195,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### Base URL
 
 ```
-Production: https://your-app.onrender.com
+Production: https://groq-finance-inference.onrender.com
 Development: http://localhost:8000
 ```
 
@@ -216,6 +216,17 @@ Currently, the API uses environment-based authentication. JWT authentication is 
 
 **Example Request:**
 ```bash
+# Production
+curl -X POST "https://groq-finance-inference.onrender.com/api/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbols": ["AAPL", "TSLA", "MSFT"],
+    "weights": [0.4, 0.3, 0.3],
+    "period": "1y",
+    "include_ai_analysis": true
+  }'
+
+# Development (local)
 curl -X POST "http://localhost:8000/api/analyze" \
   -H "Content-Type: application/json" \
   -d '{
