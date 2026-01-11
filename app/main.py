@@ -482,7 +482,7 @@ async def control_agent(control: AgentControl):
             if control.close_all_positions:
                 # In production, this would close all open positions
                 # For now, just log it
-                db.add_analysis_log(0, "EMERGENCY STOP: Closing all positions", "ERROR")
+                db.add_bot_log("EMERGENCY STOP: Closing all positions", "ERROR")
             
             return {
                 "status": "emergency_stopped",

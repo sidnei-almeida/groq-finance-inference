@@ -182,17 +182,17 @@ def main():
     print_info("Testing exchange connection (expected to fail validation)...")
     connection_data = {
         "exchange": "binance",
-        "api_key": "test_key_too_short",  # Too short, should fail validation
+        "api_key": "test_key_too_short",  # Too short for binance (needs 64 chars), should fail validation
         "api_secret": "test_secret",
         "testnet": True
     }
     
     result = test_endpoint("POST", "/api/exchange/connect", data=connection_data, expected_status=400)
-    if not result.get("success"):  # Expected to fail validation
+    if result.get("status_code") == 400:  # Expected to fail validation with 400
         print_success("POST /api/exchange/connect - Validation working (rejected invalid key)")
         tests_passed += 1
     else:
-        print_error("POST /api/exchange/connect - Should have rejected invalid key")
+        print_error(f"POST /api/exchange/connect - Should have rejected invalid key (got status {result.get('status_code')})")
         tests_failed += 1
     
     # ========================================================================
