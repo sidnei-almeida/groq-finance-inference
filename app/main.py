@@ -18,6 +18,7 @@ from app.services.quant_engine import QuantitativeEngine
 from app.services.ai_agent import AtlasAgent
 from app.services.security import get_security_service
 from app.services.auth import get_auth_service, AuthService
+from app.services.test_mode import TestModeService
 
 # Configure logging
 logging.basicConfig(
@@ -188,6 +189,63 @@ class ChangePasswordRequest(BaseModel):
         if len(v) < 8:
             raise ValueError('Password must be at least 8 characters')
         return v
+
+# Test Mode Models
+class TestModeConnectRequest(BaseModel):
+    """Request para ativar modo teste"""
+    action: str = Field(default="connect", description="Ação: 'connect', 'disconnect', 'status'")
+    test_mode: bool = Field(default=True, description="Flag indicando modo teste")
+
+class TestModeBalance(BaseModel):
+    """Saldo em modo teste"""
+    total: float = Field(default=10000.00, ge=0, description="Saldo total em USD")
+    available: float = Field(default=8500.00, ge=0, description="Saldo disponível para trading")
+    in_positions: float = Field(default=1500.00, ge=0, description="Valor alocado em posições abertas")
+    currency: str = Field(default="USD", description="Moeda do saldo")
+
+class TestModeExchangeStatus(BaseModel):
+    """Status da exchange em modo teste"""
+    connected: bool = Field(default=True, description="Indica se está conectado")
+    exchange: str = Field(default="test", description="Nome da exchange")
+    test_mode: bool = Field(default=True, description="Flag de modo teste")
+    balance: TestModeBalance = Field(description="Informações de saldo")
+    connected_at: datetime = Field(default_factory=datetime.utcnow, description="Data/hora da conexão")
+    user_id: int = Field(description="ID do usuário")
+
+class TestModeAgentStatus(BaseModel):
+    """Status do agente em modo teste"""
+    agent_status: str = Field(default="stopped", description="Status: 'running', 'stopped', 'paused'")
+    test_mode: bool = Field(default=True, description="Flag de modo teste")
+    last_update: datetime = Field(default_factory=datetime.utcnow, description="Última atualização")
+    strategy: Optional[str] = Field(default="moderate", description="Estratégia configurada")
+
+class TestModeTrade(BaseModel):
+    """Posição de trading em modo teste"""
+    id: str = Field(description="ID único da posição")
+    symbol: str = Field(description="Símbolo negociado")
+    side: str = Field(default="long", description="Lado da posição: 'long' ou 'short'")
+    quantity: float = Field(gt=0, description="Quantidade")
+    entry_price: float = Field(gt=0, description="Preço de entrada")
+    current_price: float = Field(gt=0, description="Preço atual")
+    pnl: float = Field(description="Profit/Loss em USD")
+    pnl_percent: float = Field(description="Profit/Loss em percentual")
+    test_mode: bool = Field(default=True, description="Flag de modo teste")
+    opened_at: datetime = Field(default_factory=datetime.utcnow, description="Data/hora de abertura")
+
+class TestModeLog(BaseModel):
+    """Log em modo teste"""
+    id: int = Field(description="ID único do log")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Data/hora do log")
+    level: str = Field(default="INFO", description="Nível: 'INFO', 'WARNING', 'ERROR', 'DEBUG'")
+    message: str = Field(description="Mensagem do log")
+    test_mode: bool = Field(default=True, description="Flag de modo teste")
+
+class TestModeDataResponse(BaseModel):
+    """Resposta completa com todos os dados mockados"""
+    exchange_status: TestModeExchangeStatus
+    agent_status: TestModeAgentStatus
+    open_trades: List[TestModeTrade]
+    logs: List[TestModeLog]
 
 # HTTP Bearer token security
 security_scheme = HTTPBearer(auto_error=False)
@@ -1283,6 +1341,155 @@ async def get_portfolio_history(days: int = 30, symbols: Optional[str] = None):
     except Exception as e:
         logger.error(f"Error fetching portfolio history: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# TEST MODE ENDPOINTS
+# ============================================================================
+
+@app.post("/api/test-mode", tags=["Test Mode"], response_model=TestModeExchangeStatus)
+async def connect_test_mode(
+    request: TestModeConnectRequest,
+    current_user: Optional[Dict] = Depends(get_current_user)
+):
+    """
+    Conecta ao modo teste ou executa ação (connect/disconnect/status).
+    
+    Requer autenticação.
+    """
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    
+    try:
+        if request.action == "connect":
+            exchange_status = TestModeService.connect_test_mode(current_user["id"])
+            return TestModeExchangeStatus(**exchange_status)
+        elif request.action == "disconnect":
+            result = TestModeService.disconnect_test_mode(current_user["id"])
+            raise HTTPException(
+                status_code=200,
+                detail=result
+            )
+        elif request.action == "status":
+            exchange_status = TestModeService.get_test_mode_status(current_user["id"])
+            if not exchange_status:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"status": "error", "message": "Test mode not connected"}
+                )
+            return TestModeExchangeStatus(**exchange_status)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": f"Invalid action: {request.action}"}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in test mode: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": f"Error: {str(e)}"}
+        )
+
+@app.get("/api/test-mode/status", tags=["Test Mode"], response_model=TestModeExchangeStatus)
+async def get_test_mode_status_endpoint(
+    current_user: Optional[Dict] = Depends(get_current_user)
+):
+    """Obtém status do modo teste do usuário autenticado"""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    
+    try:
+        exchange_status = TestModeService.get_test_mode_status(current_user["id"])
+        
+        if not exchange_status:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+            )
+        
+        return TestModeExchangeStatus(**exchange_status)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting test mode status: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to get test mode status"}
+        )
+
+@app.post("/api/test-mode/disconnect", tags=["Test Mode"])
+async def disconnect_test_mode_endpoint(
+    current_user: Optional[Dict] = Depends(get_current_user)
+):
+    """Desconecta do modo teste"""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    
+    try:
+        result = TestModeService.disconnect_test_mode(current_user["id"])
+        return result
+    except Exception as e:
+        logger.error(f"Error disconnecting test mode: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to disconnect test mode"}
+        )
+
+@app.get("/api/test-mode/data", tags=["Test Mode"], response_model=TestModeDataResponse)
+async def get_all_test_mode_data(
+    current_user: Optional[Dict] = Depends(get_current_user),
+    trades_limit: int = 50,
+    logs_limit: int = 50
+):
+    """
+    Obtém todos os dados mockados: exchange status, agent status, trades e logs.
+    
+    Requer autenticação e modo teste conectado.
+    """
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    
+    try:
+        # Verificar se está conectado
+        exchange_status = TestModeService.get_test_mode_status(current_user["id"])
+        if not exchange_status:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+            )
+        
+        # Obter todos os dados
+        agent_status = TestModeService.get_agent_status(current_user["id"])
+        open_trades = TestModeService.get_test_mode_trades(current_user["id"], limit=trades_limit)
+        logs = TestModeService.get_test_mode_logs(current_user["id"], limit=logs_limit)
+        
+        return TestModeDataResponse(
+            exchange_status=TestModeExchangeStatus(**exchange_status),
+            agent_status=TestModeAgentStatus(**agent_status),
+            open_trades=[TestModeTrade(**trade) for trade in open_trades],
+            logs=[TestModeLog(**log) for log in logs]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting test mode data: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to get test mode data"}
+        )
 
 # ============================================================================
 # HEALTH CHECK

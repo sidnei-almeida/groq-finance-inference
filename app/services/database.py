@@ -271,6 +271,80 @@ class DatabaseService:
                         );
                     """)
                     
+                    # Create test_mode_connections table
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS test_mode_connections (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                            connected BOOLEAN NOT NULL DEFAULT TRUE,
+                            exchange VARCHAR(50) NOT NULL DEFAULT 'test',
+                            test_mode BOOLEAN NOT NULL DEFAULT TRUE,
+                            balance_total NUMERIC(20, 2) NOT NULL DEFAULT 10000.00,
+                            balance_available NUMERIC(20, 2) NOT NULL DEFAULT 8500.00,
+                            balance_in_positions NUMERIC(20, 2) NOT NULL DEFAULT 1500.00,
+                            currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+                            connected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    
+                    # Create test_mode_trades table
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS test_mode_trades (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            trade_id VARCHAR(100) NOT NULL UNIQUE,
+                            symbol VARCHAR(10) NOT NULL,
+                            side VARCHAR(10) NOT NULL,
+                            quantity NUMERIC(20, 8) NOT NULL,
+                            entry_price NUMERIC(20, 8) NOT NULL,
+                            current_price NUMERIC(20, 8) NOT NULL,
+                            pnl NUMERIC(20, 2) DEFAULT 0.0,
+                            pnl_percent NUMERIC(10, 4) DEFAULT 0.0,
+                            test_mode BOOLEAN NOT NULL DEFAULT TRUE,
+                            opened_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    
+                    # Create test_mode_logs table
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS test_mode_logs (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            timestamp TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            level VARCHAR(20) NOT NULL,
+                            message TEXT NOT NULL,
+                            test_mode BOOLEAN NOT NULL DEFAULT TRUE
+                        );
+                    """)
+                    
+                    # Create indexes for test mode tables
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_test_mode_connections_user_id 
+                        ON test_mode_connections(user_id);
+                    """)
+                    
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_test_mode_trades_user_id 
+                        ON test_mode_trades(user_id);
+                    """)
+                    
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_test_mode_trades_trade_id 
+                        ON test_mode_trades(trade_id);
+                    """)
+                    
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_test_mode_logs_user_id 
+                        ON test_mode_logs(user_id);
+                    """)
+                    
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_test_mode_logs_timestamp 
+                        ON test_mode_logs(timestamp DESC);
+                    """)
+                    
                     # Create trigger function for updating updated_at
                     cur.execute("""
                         CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -287,6 +361,23 @@ class DatabaseService:
                         DROP TRIGGER IF EXISTS update_users_updated_at ON users;
                         CREATE TRIGGER update_users_updated_at
                         BEFORE UPDATE ON users
+                        FOR EACH ROW
+                        EXECUTE FUNCTION update_updated_at_column();
+                    """)
+                    
+                    # Create triggers for test mode tables
+                    cur.execute("""
+                        DROP TRIGGER IF EXISTS update_test_mode_connections_updated_at ON test_mode_connections;
+                        CREATE TRIGGER update_test_mode_connections_updated_at
+                        BEFORE UPDATE ON test_mode_connections
+                        FOR EACH ROW
+                        EXECUTE FUNCTION update_updated_at_column();
+                    """)
+                    
+                    cur.execute("""
+                        DROP TRIGGER IF EXISTS update_test_mode_trades_updated_at ON test_mode_trades;
+                        CREATE TRIGGER update_test_mode_trades_updated_at
+                        BEFORE UPDATE ON test_mode_trades
                         FOR EACH ROW
                         EXECUTE FUNCTION update_updated_at_column();
                     """)
