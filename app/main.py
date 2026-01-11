@@ -135,6 +135,43 @@ class LoginRequest(BaseModel):
     email: EmailStr = Field(..., description="User email")
     password: str = Field(..., description="Password")
 
+class UpdateProfileRequest(BaseModel):
+    """Update user profile request"""
+    full_name: str = Field(..., min_length=1, description="User's full name")
+    email: EmailStr = Field(..., description="User email")
+    bio: Optional[str] = Field(None, max_length=500, description="User biography (max 500 chars)")
+    location: Optional[str] = Field(None, description="User location")
+    website: Optional[str] = Field(None, description="User website URL")
+    
+    @validator('bio')
+    def validate_bio_length(cls, v):
+        if v and len(v) > 500:
+            raise ValueError('Bio must be at most 500 characters')
+        return v
+    
+    @validator('website')
+    def validate_website_url(cls, v):
+        if v and not (v.startswith('http://') or v.startswith('https://')):
+            # Try to add https:// if no protocol
+            return f'https://{v}'
+        return v
+
+class UploadAvatarRequest(BaseModel):
+    """Upload avatar request"""
+    avatar: str = Field(..., description="Base64 encoded image (data:image/...;base64,...)")
+    filename: str = Field(..., description="Image filename")
+
+class ChangePasswordRequest(BaseModel):
+    """Change password request"""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=8, description="New password (minimum 8 characters)")
+    
+    @validator('new_password')
+    def validate_password_length(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters')
+        return v
+
 # HTTP Bearer token security
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -351,6 +388,10 @@ async def get_current_user_info(current_user: Optional[Dict] = Depends(get_curre
                 "id": current_user["id"],
                 "email": current_user["email"],
                 "full_name": current_user["full_name"],
+                "avatar_url": current_user.get("avatar_url"),
+                "bio": current_user.get("bio"),
+                "location": current_user.get("location"),
+                "website": current_user.get("website"),
                 "created_at": current_user["created_at"].isoformat() if isinstance(current_user["created_at"], datetime) else str(current_user["created_at"]),
                 "updated_at": current_user["updated_at"].isoformat() if isinstance(current_user["updated_at"], datetime) else str(current_user["updated_at"]) if current_user.get("updated_at") else None,
                 "last_login": current_user["last_login"].isoformat() if isinstance(current_user.get("last_login"), datetime) else str(current_user["last_login"]) if current_user.get("last_login") else None
@@ -363,6 +404,271 @@ async def get_current_user_info(current_user: Optional[Dict] = Depends(get_curre
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": "Failed to get user"}
+        )
+
+@app.put("/api/auth/update", tags=["Authentication"])
+async def update_profile(
+    request: UpdateProfileRequest,
+    current_user: Optional[Dict] = Depends(get_current_user)
+):
+    """
+    Update user profile information.
+    
+    Returns:
+        200 OK: Profile updated successfully
+        400 Bad Request: Invalid input data
+        401 Unauthorized: Invalid token
+        409 Conflict: Email already exists (if email changed)
+    """
+    try:
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token"
+            )
+        
+        db = get_db()
+        
+        # Check if email is being changed and if it's unique
+        if request.email.lower() != current_user["email"].lower():
+            existing_user = db.get_user_by_email(request.email)
+            if existing_user and existing_user["id"] != current_user["id"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"status": "error", "message": "Email already exists"}
+                )
+        
+        # Update user profile
+        update_data = {
+            "full_name": request.full_name,
+            "email": request.email.lower(),
+            "bio": request.bio,
+            "location": request.location,
+            "website": request.website
+        }
+        
+        updated_user = db.update_user(current_user["id"], update_data)
+        
+        if not updated_user:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "message": "User not found"}
+            )
+        
+        return {
+            "user": {
+                "id": updated_user["id"],
+                "email": updated_user["email"],
+                "full_name": updated_user["full_name"],
+                "avatar_url": updated_user.get("avatar_url"),
+                "bio": updated_user.get("bio"),
+                "location": updated_user.get("location"),
+                "website": updated_user.get("website"),
+                "created_at": updated_user["created_at"].isoformat() if isinstance(updated_user["created_at"], datetime) else str(updated_user["created_at"]),
+                "updated_at": updated_user["updated_at"].isoformat() if isinstance(updated_user["updated_at"], datetime) else str(updated_user["updated_at"]) if updated_user.get("updated_at") else None
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating profile: {str(e)}")
+        if "already exists" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail={"status": "error", "message": "Email already exists"}
+            )
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to update profile"}
+        )
+
+@app.post("/api/auth/upload-avatar", tags=["Authentication"])
+async def upload_avatar(
+    request: UploadAvatarRequest,
+    current_user: Optional[Dict] = Depends(get_current_user)
+):
+    """
+    Upload user avatar image.
+    
+    Accepts base64 encoded images (JPEG, PNG, WebP, GIF).
+    Max size: 5MB. Images are resized to 400x400px.
+    
+    Returns:
+        200 OK: Avatar uploaded successfully
+        400 Bad Request: Invalid image format or size
+        401 Unauthorized: Invalid token
+        413 Payload Too Large: Image exceeds size limit
+    """
+    try:
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token"
+            )
+        
+        import base64
+        import io
+        from PIL import Image
+        
+        # Extract base64 data (handle data:image/...;base64, prefix)
+        if "," in request.avatar:
+            header, base64_data = request.avatar.split(",", 1)
+        else:
+            base64_data = request.avatar
+        
+        # Decode base64
+        try:
+            image_data = base64.b64decode(base64_data)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Invalid base64 image data"}
+            )
+        
+        # Validate image size (max 5MB)
+        if len(image_data) > 5 * 1024 * 1024:
+            raise HTTPException(
+                status_code=413,
+                detail={"status": "error", "message": "Image size exceeds 5MB limit"}
+            )
+        
+        # Validate and process image
+        try:
+            image = Image.open(io.BytesIO(image_data))
+            image.verify()  # Verify it's a valid image
+            
+            # Reopen for processing (verify() closes the image)
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Validate format
+            if image.format not in ['JPEG', 'PNG', 'WEBP', 'GIF']:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"status": "error", "message": f"Unsupported image format: {image.format}. Supported: JPEG, PNG, WebP, GIF"}
+                )
+            
+            # Resize to 400x400 (maintain aspect ratio)
+            image.thumbnail((400, 400), Image.Resampling.LANCZOS)
+            
+            # Convert back to base64
+            buffer = io.BytesIO()
+            # Convert RGBA to RGB if necessary (for PNG with transparency)
+            if image.format == 'PNG' and image.mode == 'RGBA':
+                # Create white background
+                background = Image.new('RGB', image.size, (255, 255, 255))
+                background.paste(image, mask=image.split()[3])  # Use alpha channel as mask
+                image = background
+            
+            image.save(buffer, format='JPEG', quality=85, optimize=True)
+            buffer.seek(0)
+            processed_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+            # Store as data URI
+            avatar_url = f"data:image/jpeg;base64,{processed_base64}"
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error processing image: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Invalid image format"}
+            )
+        
+        # Update user avatar
+        db = get_db()
+        updated_user = db.update_user(current_user["id"], {"avatar_url": avatar_url})
+        
+        if not updated_user:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "message": "User not found"}
+            )
+        
+        return {
+            "user": {
+                "id": updated_user["id"],
+                "email": updated_user["email"],
+                "full_name": updated_user["full_name"],
+                "avatar_url": updated_user.get("avatar_url"),
+                "updated_at": updated_user["updated_at"].isoformat() if isinstance(updated_user["updated_at"], datetime) else str(updated_user["updated_at"]) if updated_user.get("updated_at") else None
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading avatar: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to upload avatar"}
+        )
+
+@app.post("/api/auth/update-password", tags=["Authentication"])
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user: Optional[Dict] = Depends(get_current_user)
+):
+    """
+    Change user password.
+    
+    Requires current password verification.
+    New password must be at least 8 characters and different from current password.
+    
+    Returns:
+        200 OK: Password updated successfully
+        400 Bad Request: Invalid password (too short, same as current, etc.)
+        401 Unauthorized: Invalid token or incorrect current password
+        403 Forbidden: Current password is incorrect
+    """
+    try:
+        if not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token"
+            )
+        
+        db = get_db()
+        auth_service = get_auth_service()
+        
+        # Get user with password hash
+        user = db.get_user_by_email(current_user["email"])
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail={"status": "error", "message": "User not found"}
+            )
+        
+        # Verify current password
+        if not auth_service.verify_password(request.current_password, user["password_hash"]):
+            raise HTTPException(
+                status_code=403,
+                detail={"status": "error", "message": "Current password is incorrect"}
+            )
+        
+        # Check if new password is different
+        if auth_service.verify_password(request.new_password, user["password_hash"]):
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "New password must be different from current password"}
+            )
+        
+        # Hash new password
+        new_password_hash = auth_service.hash_password(request.new_password)
+        
+        # Update password
+        db.update_user_password(current_user["id"], new_password_hash)
+        
+        return {
+            "status": "success",
+            "message": "Password updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error changing password: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to update password"}
         )
 
 # ============================================================================

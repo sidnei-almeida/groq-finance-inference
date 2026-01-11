@@ -31,3 +31,6 @@ PyJWT>=2.8.0
 
 # Validation
 email-validator>=2.0.0
+
+# Image Processing
+Pillow>=10.0.0

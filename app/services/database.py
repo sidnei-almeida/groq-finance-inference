@@ -223,6 +223,40 @@ class DatabaseService:
                         );
                     """)
                     
+                    # Add profile fields if they don't exist (migration)
+                    cur.execute("""
+                        DO $$ 
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name='users' AND column_name='avatar_url'
+                            ) THEN
+                                ALTER TABLE users ADD COLUMN avatar_url TEXT;
+                            END IF;
+                            
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name='users' AND column_name='bio'
+                            ) THEN
+                                ALTER TABLE users ADD COLUMN bio TEXT;
+                            END IF;
+                            
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name='users' AND column_name='location'
+                            ) THEN
+                                ALTER TABLE users ADD COLUMN location VARCHAR(255);
+                            END IF;
+                            
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns 
+                                WHERE table_name='users' AND column_name='website'
+                            ) THEN
+                                ALTER TABLE users ADD COLUMN website VARCHAR(255);
+                            END IF;
+                        END $$;
+                    """)
+                    
                     # Create user_sessions table for token management
                     cur.execute("""
                         CREATE TABLE IF NOT EXISTS user_sessions (
@@ -1064,7 +1098,8 @@ class DatabaseService:
             with self.get_connection() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute("""
-                        SELECT id, email, full_name, created_at, updated_at, last_login, is_active
+                        SELECT id, email, full_name, avatar_url, bio, location, website,
+                               created_at, updated_at, last_login, is_active
                         FROM users
                         WHERE id = %s AND is_active = TRUE;
                     """, (user_id,))
@@ -1144,6 +1179,95 @@ class DatabaseService:
                     conn.commit()
         except Exception as e:
             logger.warning(f"Error deactivating sessions: {str(e)}")
+    
+    def update_user(self, user_id: int, update_data: Dict[str, Any]) -> Optional[Dict]:
+        """
+        Update user profile information.
+        
+        Args:
+            user_id: User ID
+            update_data: Dictionary with fields to update (full_name, email, bio, location, website, avatar_url, password_hash)
+        
+        Returns:
+            Updated user dictionary (without password_hash) or None
+        
+        Raises:
+            Exception: If email already exists (when updating email)
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Check if email is being changed and if it's unique
+                    if "email" in update_data:
+                        email = update_data["email"].lower()
+                        cur.execute("""
+                            SELECT id FROM users
+                            WHERE email = %s AND id != %s;
+                        """, (email, user_id))
+                        if cur.fetchone():
+                            raise Exception("Email already exists")
+                    
+                    # Build dynamic UPDATE query
+                    allowed_fields = ["full_name", "email", "bio", "location", "website", "avatar_url", "password_hash"]
+                    update_fields = []
+                    update_values = []
+                    
+                    for field in allowed_fields:
+                        if field in update_data:
+                            update_fields.append(f"{field} = %s")
+                            update_values.append(update_data[field])
+                    
+                    if not update_fields:
+                        # No fields to update, just return current user
+                        return self.get_user_by_id(user_id)
+                    
+                    # Add updated_at (will be set by trigger, but explicit is fine)
+                    update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                    
+                    update_values.append(user_id)
+                    
+                    query = f"""
+                        UPDATE users
+                        SET {', '.join(update_fields)}
+                        WHERE id = %s
+                        RETURNING id, email, full_name, avatar_url, bio, location, website, 
+                                  created_at, updated_at, last_login, is_active;
+                    """
+                    
+                    cur.execute(query, update_values)
+                    user = dict(cur.fetchone())
+                    conn.commit()
+                    logger.info(f"User {user_id} updated")
+                    return user
+        except psycopg2.IntegrityError as e:
+            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+                raise Exception("Email already exists")
+            raise
+        except Exception as e:
+            logger.error(f"Error updating user: {str(e)}")
+            raise
+    
+    def update_user_password(self, user_id: int, new_password_hash: str):
+        """
+        Update user password.
+        
+        Args:
+            user_id: User ID
+            new_password_hash: New hashed password
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE users
+                        SET password_hash = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s;
+                    """, (new_password_hash, user_id))
+                    conn.commit()
+                    logger.info(f"Password updated for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error updating password: {str(e)}")
+            raise
     
     def close(self):
         """Close all database connections."""
