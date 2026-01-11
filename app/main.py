@@ -752,7 +752,8 @@ async def control_agent(control: AgentControl):
             
             return {
                 "status": "stopped",
-                "message": "Agent stopped successfully"
+                "message": "Agent stopped successfully",
+                "timestamp": datetime.utcnow().isoformat() + "Z"
             }
         
         elif control.action == "emergency_stop":
@@ -769,7 +770,8 @@ async def control_agent(control: AgentControl):
             return {
                 "status": "emergency_stopped",
                 "message": "Emergency stop activated",
-                "positions_closed": positions_closed
+                "positions_closed": positions_closed,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
             }
         
         else:
