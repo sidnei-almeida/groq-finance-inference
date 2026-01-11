@@ -410,20 +410,30 @@ class QuantitativeEngine:
             # 7. CORRELATION MATRIX - Diversification analysis
             logger.info("Calculating Correlation Matrix...")
             correlation_matrix = daily_returns.corr()
-            advanced['avg_correlation'] = round(
-                correlation_matrix.values[np.triu_indices_from(correlation_matrix.values, k=1)].mean(),
-                3
-            )
-            advanced['min_correlation'] = round(
-                correlation_matrix.values[np.triu_indices_from(correlation_matrix.values, k=1)].min(),
-                3
-            )
-            advanced['max_correlation'] = round(
-                correlation_matrix.values[np.triu_indices_from(correlation_matrix.values, k=1)].max(),
-                3
-            )
-            logger.info(f"  ✓ Average Correlation: {advanced['avg_correlation']}")
-            logger.info(f"  ✓ Correlation Range: [{advanced['min_correlation']}, {advanced['max_correlation']}]")
+            
+            # Handle single asset case (no correlation to calculate)
+            if len(daily_returns.columns) == 1:
+                advanced['avg_correlation'] = None
+                advanced['min_correlation'] = None
+                advanced['max_correlation'] = None
+                logger.info("  ✓ Single asset portfolio - correlation metrics not applicable")
+            else:
+                # Get upper triangle indices (excluding diagonal, k=1)
+                triu_indices = np.triu_indices_from(correlation_matrix.values, k=1)
+                triu_values = correlation_matrix.values[triu_indices]
+                
+                if len(triu_values) > 0:
+                    advanced['avg_correlation'] = round(triu_values.mean(), 3)
+                    advanced['min_correlation'] = round(triu_values.min(), 3)
+                    advanced['max_correlation'] = round(triu_values.max(), 3)
+                    logger.info(f"  ✓ Average Correlation: {advanced['avg_correlation']}")
+                    logger.info(f"  ✓ Correlation Range: [{advanced['min_correlation']}, {advanced['max_correlation']}]")
+                else:
+                    # Fallback: should not happen, but handle gracefully
+                    advanced['avg_correlation'] = None
+                    advanced['min_correlation'] = None
+                    advanced['max_correlation'] = None
+                    logger.warning("  ⚠️  Could not calculate correlation metrics")
             
             # 8. PORTFOLIO CONCENTRATION (Herfindahl-Hirschman Index)
             logger.info("Calculating Portfolio Concentration (HHI)...")
