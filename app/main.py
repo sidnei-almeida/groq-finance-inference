@@ -4,12 +4,14 @@ All state stored in database. API is stateless.
 """
 
 import logging
+from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator, EmailStr
 import uvicorn
 
@@ -19,6 +21,14 @@ from app.services.ai_agent import AtlasAgent
 from app.services.security import get_security_service
 from app.services.auth import get_auth_service, AuthService
 from app.services.test_mode import TestModeService
+from app.api.paper_trading import router as paper_trading_router
+from app.services.paper_trading_service import get_paper_trading_service
+from app.schemas.paper_trading import (
+    ProcessInlineSignalRequest,
+    ProcessSignalRequest,
+    SeedBalanceRequest,
+    SignalCreate,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -58,6 +68,12 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,  # Cache preflight requests for 1 hour
 )
+
+# Fase 2 — paper trading & dashboard
+app.include_router(paper_trading_router)
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 # ============================================================================
 # PYDANTIC MODELS
@@ -192,56 +208,56 @@ class ChangePasswordRequest(BaseModel):
 
 # Test Mode Models
 class TestModeConnectRequest(BaseModel):
-    """Request para ativar modo teste"""
-    action: str = Field(default="connect", description="Ação: 'connect', 'disconnect', 'status'")
-    test_mode: bool = Field(default=True, description="Flag indicando modo teste")
+    """Request to activate test mode"""
+    action: str = Field(default="connect", description="Action: 'connect', 'disconnect', 'status'")
+    test_mode: bool = Field(default=True, description="Flag indicating test mode")
 
 class TestModeBalance(BaseModel):
-    """Saldo em modo teste"""
-    total: float = Field(default=10000.00, ge=0, description="Saldo total em USD")
-    available: float = Field(default=8500.00, ge=0, description="Saldo disponível para trading")
-    in_positions: float = Field(default=1500.00, ge=0, description="Valor alocado em posições abertas")
-    currency: str = Field(default="USD", description="Moeda do saldo")
+    """Balance in test mode"""
+    total: float = Field(default=10000.00, ge=0, description="Total balance in USD")
+    available: float = Field(default=8500.00, ge=0, description="Available balance for trading")
+    in_positions: float = Field(default=1500.00, ge=0, description="Value allocated in open positions")
+    currency: str = Field(default="USD", description="Balance currency")
 
 class TestModeExchangeStatus(BaseModel):
-    """Status da exchange em modo teste"""
-    connected: bool = Field(default=True, description="Indica se está conectado")
-    exchange: str = Field(default="test", description="Nome da exchange")
-    test_mode: bool = Field(default=True, description="Flag de modo teste")
-    balance: TestModeBalance = Field(description="Informações de saldo")
-    connected_at: datetime = Field(default_factory=datetime.utcnow, description="Data/hora da conexão")
-    user_id: int = Field(description="ID do usuário")
+    """Exchange status in test mode"""
+    connected: bool = Field(default=True, description="Whether connected")
+    exchange: str = Field(default="test", description="Exchange name")
+    test_mode: bool = Field(default=True, description="Test mode flag")
+    balance: TestModeBalance = Field(description="Balance information")
+    connected_at: datetime = Field(default_factory=datetime.utcnow, description="Connection timestamp")
+    user_id: int = Field(description="User ID")
 
 class TestModeAgentStatus(BaseModel):
-    """Status do agente em modo teste"""
+    """Agent status in test mode"""
     agent_status: str = Field(default="stopped", description="Status: 'running', 'stopped', 'paused'")
-    test_mode: bool = Field(default=True, description="Flag de modo teste")
-    last_update: datetime = Field(default_factory=datetime.utcnow, description="Última atualização")
-    strategy: Optional[str] = Field(default="moderate", description="Estratégia configurada")
+    test_mode: bool = Field(default=True, description="Test mode flag")
+    last_update: datetime = Field(default_factory=datetime.utcnow, description="Last update")
+    strategy: Optional[str] = Field(default="moderate", description="Configured strategy")
 
 class TestModeTrade(BaseModel):
-    """Posição de trading em modo teste"""
-    id: str = Field(description="ID único da posição")
-    symbol: str = Field(description="Símbolo negociado")
-    side: str = Field(default="long", description="Lado da posição: 'long' ou 'short'")
-    quantity: float = Field(gt=0, description="Quantidade")
-    entry_price: float = Field(gt=0, description="Preço de entrada")
-    current_price: float = Field(gt=0, description="Preço atual")
-    pnl: float = Field(description="Profit/Loss em USD")
-    pnl_percent: float = Field(description="Profit/Loss em percentual")
-    test_mode: bool = Field(default=True, description="Flag de modo teste")
-    opened_at: datetime = Field(default_factory=datetime.utcnow, description="Data/hora de abertura")
+    """Trading position in test mode"""
+    id: str = Field(description="Unique position ID")
+    symbol: str = Field(description="Traded symbol")
+    side: str = Field(default="long", description="Position side: 'long' or 'short'")
+    quantity: float = Field(gt=0, description="Quantity")
+    entry_price: float = Field(gt=0, description="Entry price")
+    current_price: float = Field(gt=0, description="Current price")
+    pnl: float = Field(description="Profit/Loss in USD")
+    pnl_percent: float = Field(description="Profit/Loss percentage")
+    test_mode: bool = Field(default=True, description="Test mode flag")
+    opened_at: datetime = Field(default_factory=datetime.utcnow, description="Open timestamp")
 
 class TestModeLog(BaseModel):
-    """Log em modo teste"""
-    id: int = Field(description="ID único do log")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Data/hora do log")
-    level: str = Field(default="INFO", description="Nível: 'INFO', 'WARNING', 'ERROR', 'DEBUG'")
-    message: str = Field(description="Mensagem do log")
-    test_mode: bool = Field(default=True, description="Flag de modo teste")
+    """Log in test mode"""
+    id: int = Field(description="Unique log ID")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Log timestamp")
+    level: str = Field(default="INFO", description="Level: 'INFO', 'WARNING', 'ERROR', 'DEBUG'")
+    message: str = Field(description="Log message")
+    test_mode: bool = Field(default=True, description="Test mode flag")
 
 class TestModeDataResponse(BaseModel):
-    """Resposta completa com todos os dados mockados"""
+    """Complete response with all mocked data"""
     exchange_status: TestModeExchangeStatus
     agent_status: TestModeAgentStatus
     open_trades: List[TestModeTrade]
@@ -1352,9 +1368,9 @@ async def connect_test_mode(
     current_user: Optional[Dict] = Depends(get_current_user)
 ):
     """
-    Conecta ao modo teste ou executa ação (connect/disconnect/status).
+    Connect to test mode or run an action (connect/disconnect/status).
     
-    Requer autenticação.
+    Requires authentication.
     """
     if not current_user:
         raise HTTPException(
@@ -1398,7 +1414,7 @@ async def connect_test_mode(
 async def get_test_mode_status_endpoint(
     current_user: Optional[Dict] = Depends(get_current_user)
 ):
-    """Obtém status do modo teste do usuário autenticado"""
+    """Get test mode status for the authenticated user."""
     if not current_user:
         raise HTTPException(
             status_code=401,
@@ -1428,7 +1444,7 @@ async def get_test_mode_status_endpoint(
 async def disconnect_test_mode_endpoint(
     current_user: Optional[Dict] = Depends(get_current_user)
 ):
-    """Desconecta do modo teste"""
+    """Disconnect from test mode."""
     if not current_user:
         raise HTTPException(
             status_code=401,
@@ -1452,9 +1468,9 @@ async def get_all_test_mode_data(
     logs_limit: int = 50
 ):
     """
-    Obtém todos os dados mockados: exchange status, agent status, trades e logs.
+    Get all mocked data: exchange status, agent status, trades, and logs.
     
-    Requer autenticação e modo teste conectado.
+    Requires authentication and an active test mode connection.
     """
     if not current_user:
         raise HTTPException(
@@ -1463,7 +1479,7 @@ async def get_all_test_mode_data(
         )
     
     try:
-        # Verificar se está conectado
+        # Verify active test mode connection
         exchange_status = TestModeService.get_test_mode_status(current_user["id"])
         if not exchange_status:
             raise HTTPException(
@@ -1490,6 +1506,179 @@ async def get_all_test_mode_data(
             status_code=500,
             detail={"status": "error", "message": "Failed to get test mode data"}
         )
+
+
+@app.get("/api/test-mode/paper-dashboard", tags=["Test Mode"])
+async def get_test_mode_paper_dashboard(
+    current_user: Optional[Dict] = Depends(get_current_user),
+    signals_limit: int = 100,
+    trades_limit: int = 200,
+    equity_limit: int = 500,
+):
+    """Dados completos da Fase 2 no modo mocked wallet."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    try:
+        return TestModeService.get_phase2_mocked_data(
+            user_id=current_user["id"],
+            signals_limit=signals_limit,
+            trades_limit=trades_limit,
+            equity_limit=equity_limit,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail={"status": "error", "message": str(e)}) from e
+    except Exception as e:
+        logger.error(f"Error getting mocked phase2 dashboard: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": "Failed to get mocked dashboard data"}
+        ) from e
+
+
+@app.post("/api/test-mode/paper/seed-balance", tags=["Test Mode"])
+async def test_mode_seed_balance(
+    body: SeedBalanceRequest,
+    current_user: Optional[Dict] = Depends(get_current_user),
+):
+    """Set initial balance for mocked wallet using paper trading engine."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    if not TestModeService.is_mocked_mode_active(current_user["id"]):
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+        )
+    paper = get_paper_trading_service()
+    portfolio = paper.seed_balance(current_user["id"], body.initial_balance)
+    TestModeService.sync_mock_balance_from_paper(current_user["id"])
+    return {"wallet_mode": "mocked", "portfolio": portfolio}
+
+
+@app.post("/api/test-mode/paper/reset", tags=["Test Mode"])
+async def test_mode_reset_simulation(
+    body: SeedBalanceRequest,
+    current_user: Optional[Dict] = Depends(get_current_user),
+):
+    """Reset simulation state for mocked wallet."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    if not TestModeService.is_mocked_mode_active(current_user["id"]):
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+        )
+    paper = get_paper_trading_service()
+    portfolio = paper.reset_simulation(current_user["id"], body.initial_balance)
+    TestModeService.sync_mock_balance_from_paper(current_user["id"])
+    return {"wallet_mode": "mocked", "portfolio": portfolio}
+
+
+@app.post("/api/test-mode/paper/process-signal", tags=["Test Mode"])
+async def test_mode_process_inline_signal(
+    body: ProcessInlineSignalRequest,
+    current_user: Optional[Dict] = Depends(get_current_user),
+):
+    """Create and process a signal in mocked wallet."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    if not TestModeService.is_mocked_mode_active(current_user["id"]):
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+        )
+    paper = get_paper_trading_service()
+    portfolio, trades = paper.process_inline_signal(
+        current_user["id"],
+        body.symbol,
+        body.signal_type.value,
+        body.signal_price,
+        body.confidence_score,
+        body.explanation,
+    )
+    TestModeService.sync_mock_balance_from_paper(current_user["id"])
+    return {"wallet_mode": "mocked", "portfolio": portfolio, "trades_affected": trades}
+
+
+@app.post("/api/test-mode/paper/signals", tags=["Test Mode"])
+async def test_mode_create_signal(
+    body: SignalCreate,
+    current_user: Optional[Dict] = Depends(get_current_user),
+):
+    """Create a user-scoped signal in mocked mode."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    if not TestModeService.is_mocked_mode_active(current_user["id"]):
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+        )
+    paper = get_paper_trading_service()
+    sid = paper.repo.insert_signal(
+        current_user["id"],
+        body.symbol,
+        body.signal_type.value,
+        body.signal_price,
+        body.confidence_score,
+        body.explanation,
+    )
+    return paper.repo.get_signal(sid, user_id=current_user["id"])
+
+
+@app.get("/api/test-mode/paper/signals", tags=["Test Mode"])
+async def test_mode_list_signals(
+    current_user: Optional[Dict] = Depends(get_current_user),
+    limit: int = 100,
+):
+    """List user signal history in mocked mode."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    if not TestModeService.is_mocked_mode_active(current_user["id"]):
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+        )
+    paper = get_paper_trading_service()
+    return paper.repo.list_signals(limit=limit, user_id=current_user["id"])
+
+
+@app.post("/api/test-mode/paper/process-signal-by-id", tags=["Test Mode"])
+async def test_mode_process_signal_by_id(
+    body: ProcessSignalRequest,
+    current_user: Optional[Dict] = Depends(get_current_user),
+):
+    """Process an existing mocked-wallet signal by ID."""
+    if not current_user:
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication required"}
+        )
+    if not TestModeService.is_mocked_mode_active(current_user["id"]):
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "error", "message": "Test mode not connected. Please connect first."}
+        )
+    paper = get_paper_trading_service()
+    portfolio, trades = paper.process_signal(current_user["id"], body.signal_id)
+    TestModeService.sync_mock_balance_from_paper(current_user["id"])
+    return {"wallet_mode": "mocked", "signal_id": body.signal_id, "portfolio": portfolio, "trades_affected": trades}
 
 # ============================================================================
 # HEALTH CHECK
@@ -1521,8 +1710,18 @@ async def root():
     return {
         "message": "FinSight API - Quantitative Portfolio Analysis",
         "version": "1.0.0",
-        "docs": "/docs"
+        "docs": "/docs",
+        "paper_dashboard": "/paper-dashboard",
     }
+
+
+@app.get("/paper-dashboard", tags=["Paper Trading"])
+async def paper_dashboard_page():
+    """Dashboard HTML (Fase 2) — paper trading e métricas."""
+    path = _STATIC_DIR / "dashboard.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="dashboard.html não encontrado")
+    return FileResponse(path)
 
 # ============================================================================
 # STARTUP/SHUTDOWN

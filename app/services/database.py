@@ -345,6 +345,118 @@ class DatabaseService:
                         ON test_mode_logs(timestamp DESC);
                     """)
                     
+                    # ------------------------------------------------------------------
+                    # Paper trading (Fase 2) — simulação, sinais, equity history
+                    # ------------------------------------------------------------------
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_signals (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                            symbol VARCHAR(64) NOT NULL,
+                            signal_type VARCHAR(10) NOT NULL CHECK (signal_type IN ('BUY', 'SELL')),
+                            signal_price NUMERIC(20, 8) NOT NULL,
+                            confidence_score NUMERIC(10, 4),
+                            explanation TEXT,
+                            created_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_portfolios (
+                            id SERIAL PRIMARY KEY,
+                            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                            initial_balance NUMERIC(20, 2) NOT NULL,
+                            cash_balance NUMERIC(20, 2) NOT NULL,
+                            equity NUMERIC(20, 2) NOT NULL,
+                            total_return_pct NUMERIC(12, 4) NOT NULL DEFAULT 0,
+                            allocation_pct NUMERIC(8, 6) NOT NULL DEFAULT 0.100000,
+                            fee_rate NUMERIC(12, 8) NOT NULL DEFAULT 0,
+                            slippage_bps NUMERIC(12, 4) NOT NULL DEFAULT 0,
+                            created_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW(),
+                            UNIQUE(user_id)
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_positions (
+                            id SERIAL PRIMARY KEY,
+                            portfolio_id INTEGER NOT NULL REFERENCES paper_portfolios(id) ON DELETE CASCADE,
+                            symbol VARCHAR(64) NOT NULL,
+                            quantity NUMERIC(20, 8) NOT NULL,
+                            avg_entry_price NUMERIC(20, 8) NOT NULL,
+                            current_price NUMERIC(20, 8) NOT NULL,
+                            unrealized_pnl NUMERIC(20, 2) NOT NULL DEFAULT 0,
+                            opened_at TIMESTAMPTZ DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ DEFAULT NOW(),
+                            UNIQUE(portfolio_id, symbol)
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_trades (
+                            id SERIAL PRIMARY KEY,
+                            portfolio_id INTEGER NOT NULL REFERENCES paper_portfolios(id) ON DELETE CASCADE,
+                            signal_id INTEGER REFERENCES paper_signals(id) ON DELETE SET NULL,
+                            symbol VARCHAR(64) NOT NULL,
+                            side VARCHAR(10) NOT NULL CHECK (side IN ('BUY', 'SELL')),
+                            quantity NUMERIC(20, 8) NOT NULL,
+                            entry_price NUMERIC(20, 8) NOT NULL,
+                            exit_price NUMERIC(20, 8),
+                            realized_pnl NUMERIC(20, 2),
+                            status VARCHAR(20) NOT NULL DEFAULT 'OPEN'
+                                CHECK (status IN ('OPEN', 'CLOSED')),
+                            opened_at TIMESTAMPTZ DEFAULT NOW(),
+                            closed_at TIMESTAMPTZ
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS paper_equity_history (
+                            id SERIAL PRIMARY KEY,
+                            portfolio_id INTEGER NOT NULL REFERENCES paper_portfolios(id) ON DELETE CASCADE,
+                            equity NUMERIC(20, 2) NOT NULL,
+                            cash_balance NUMERIC(20, 2) NOT NULL,
+                            recorded_at TIMESTAMPTZ DEFAULT NOW()
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_portfolios_user_id
+                        ON paper_portfolios(user_id);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_positions_portfolio_id
+                        ON paper_positions(portfolio_id);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_trades_portfolio_id
+                        ON paper_trades(portfolio_id);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_trades_status
+                        ON paper_trades(portfolio_id, status);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_equity_portfolio_time
+                        ON paper_equity_history(portfolio_id, recorded_at DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_signals_created
+                        ON paper_signals(created_at DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS ix_paper_signals_user_created
+                        ON paper_signals(user_id, created_at DESC);
+                    """)
+                    cur.execute("""
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_name='paper_signals' AND column_name='user_id'
+                            ) THEN
+                                ALTER TABLE paper_signals
+                                ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+                            END IF;
+                        END $$;
+                    """)
+                    
                     # Create trigger function for updating updated_at
                     cur.execute("""
                         CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -378,6 +490,21 @@ class DatabaseService:
                         DROP TRIGGER IF EXISTS update_test_mode_trades_updated_at ON test_mode_trades;
                         CREATE TRIGGER update_test_mode_trades_updated_at
                         BEFORE UPDATE ON test_mode_trades
+                        FOR EACH ROW
+                        EXECUTE FUNCTION update_updated_at_column();
+                    """)
+                    
+                    cur.execute("""
+                        DROP TRIGGER IF EXISTS update_paper_portfolios_updated_at ON paper_portfolios;
+                        CREATE TRIGGER update_paper_portfolios_updated_at
+                        BEFORE UPDATE ON paper_portfolios
+                        FOR EACH ROW
+                        EXECUTE FUNCTION update_updated_at_column();
+                    """)
+                    cur.execute("""
+                        DROP TRIGGER IF EXISTS update_paper_positions_updated_at ON paper_positions;
+                        CREATE TRIGGER update_paper_positions_updated_at
+                        BEFORE UPDATE ON paper_positions
                         FOR EACH ROW
                         EXECUTE FUNCTION update_updated_at_column();
                     """)

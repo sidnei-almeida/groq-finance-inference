@@ -1,39 +1,41 @@
-"""
-Test Mode Service - Gerenciamento de modo teste
-"""
+"""Test Mode Service - manages mock wallet and paper trading integration."""
 
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Dict, Any
+
+from app.repositories.paper_trading_repo import get_paper_repo
 from app.services.database import get_db
+from app.services.paper_trading_service import get_paper_trading_service
+from app.services.portfolio_service import get_portfolio_service
 
 logger = logging.getLogger(__name__)
 
 
 class TestModeService:
-    """Serviço para gerenciar modo teste"""
+    """Service that manages test mode."""
     
-    # Preços base para simulação
+    # Base prices for simulation
     BASE_PRICES = {
         "BTC": 45000.00,
         "ETH": 2800.00,
         "AAPL": 175.50
     }
     
-    # Variação percentual máxima para simular movimento de preços
+    # Max percentage variation for simulated price movement
     PRICE_VARIATION = 0.02  # 2%
     
     @staticmethod
     def connect_test_mode(user_id: int) -> Dict[str, Any]:
         """
-        Conecta usuário ao modo teste
+        Connect a user to test mode.
         
         Args:
-            user_id: ID do usuário
+            user_id: User ID
             
         Returns:
-            Status da exchange em modo teste
+            Test mode exchange status
         """
         db = get_db()
         
@@ -58,7 +60,7 @@ class TestModeService:
                             WHERE user_id = %s
                         """, (user_id,))
                     else:
-                        # Criar nova conexão
+                        # Create new connection
                         cur.execute("""
                             INSERT INTO test_mode_connections
                             (user_id, connected, exchange, test_mode, balance_total, 
@@ -66,16 +68,18 @@ class TestModeService:
                             VALUES (%s, TRUE, 'test', TRUE, 10000.00, 8500.00, 1500.00, 'USD', CURRENT_TIMESTAMP)
                         """, (user_id,))
                         
-                        # Criar trades iniciais
+                        # Create initial demo trades
                         TestModeService._create_initial_trades(cur, user_id)
                         
-                        # Criar logs iniciais
+                        # Create initial logs
                         TestModeService._create_initial_logs(cur, user_id)
                     
                     conn.commit()
-                    
-                    # Retornar status
-                    return TestModeService.get_test_mode_status(user_id)
+            # Ensure active paper portfolio in mocked mode
+            paper_service = get_paper_trading_service()
+            paper_service.ensure_portfolio(user_id, initial_balance=10000.0)
+            TestModeService.sync_mock_balance_from_paper(user_id)
+            return TestModeService.get_test_mode_status(user_id)
         except Exception as e:
             logger.error(f"Error connecting test mode: {str(e)}")
             raise
@@ -83,13 +87,13 @@ class TestModeService:
     @staticmethod
     def disconnect_test_mode(user_id: int) -> Dict[str, Any]:
         """
-        Desconecta usuário do modo teste
+        Disconnect user from test mode.
         
         Args:
-            user_id: ID do usuário
+            user_id: User ID
             
         Returns:
-            Confirmação de desconexão
+            Disconnect confirmation
         """
         db = get_db()
         
@@ -112,13 +116,13 @@ class TestModeService:
     @staticmethod
     def get_test_mode_status(user_id: int) -> Optional[Dict[str, Any]]:
         """
-        Obtém status do modo teste do usuário
+        Get the user's test mode status.
         
         Args:
-            user_id: ID do usuário
+            user_id: User ID
             
         Returns:
-            Status da exchange ou None se não conectado
+            Exchange status or None when disconnected
         """
         db = get_db()
         
@@ -138,10 +142,11 @@ class TestModeService:
                     columns = [desc[0] for desc in cur.description]
                     connection = dict(zip(columns, row))
                     
-                    return {
+                    status = {
                         "connected": connection["connected"],
                         "exchange": connection["exchange"],
                         "test_mode": connection["test_mode"],
+                        "wallet_mode": "mocked",
                         "balance": {
                             "total": float(connection["balance_total"]),
                             "available": float(connection["balance_available"]),
@@ -151,24 +156,103 @@ class TestModeService:
                         "connected_at": connection["connected_at"].isoformat() if isinstance(connection["connected_at"], datetime) else str(connection["connected_at"]),
                         "user_id": connection["user_id"]
                     }
+                    return status
         except Exception as e:
             logger.error(f"Error getting test mode status: {str(e)}")
             return None
+
+    @staticmethod
+    def is_mocked_mode_active(user_id: int) -> bool:
+        """Return whether user's wallet is currently in mocked mode."""
+        db = get_db()
+        try:
+            with db.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM test_mode_connections
+                        WHERE user_id = %s AND connected = TRUE AND test_mode = TRUE;
+                        """,
+                        (user_id,),
+                    )
+                    return cur.fetchone() is not None
+        except Exception:
+            return False
+
+    @staticmethod
+    def sync_mock_balance_from_paper(user_id: int) -> None:
+        """Sync test_mode balances from the paper portfolio state."""
+        repo = get_paper_repo()
+        portfolio = repo.get_portfolio_by_user(user_id)
+        if not portfolio:
+            return
+        pid = int(portfolio["id"])
+        cash = float(portfolio["cash_balance"])
+        equity = float(portfolio["equity"])
+        in_positions = max(equity - cash, 0.0)
+        db = get_db()
+        with db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE test_mode_connections
+                    SET balance_total = %s,
+                        balance_available = %s,
+                        balance_in_positions = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = %s AND test_mode = TRUE;
+                    """,
+                    (equity, cash, in_positions, user_id),
+                )
+            conn.commit()
     
     @staticmethod
     def get_test_mode_trades(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         """
-        Obtém trades abertos em modo teste
+        Get open trades in test mode.
         
         Args:
-            user_id: ID do usuário
-            limit: Limite de resultados
+            user_id: User ID
+            limit: Result limit
             
         Returns:
-            Lista de trades
+            Trade list
         """
+        # Prioritize real paper simulation trades when mock wallet is active.
+        if TestModeService.is_mocked_mode_active(user_id):
+            try:
+                psvc = get_portfolio_service()
+                trades = psvc.list_trades(user_id, limit=limit)
+                out: List[Dict[str, Any]] = []
+                for tr in trades:
+                    entry = float(tr["entry_price"])
+                    current_price = float(tr["exit_price"]) if tr.get("exit_price") is not None else entry
+                    if tr.get("realized_pnl") is not None:
+                        pnl = float(tr["realized_pnl"])
+                    else:
+                        pnl = (current_price - entry) * float(tr["quantity"])
+                    pnl_percent = (pnl / (entry * float(tr["quantity"])) * 100.0) if entry > 0 else 0.0
+                    side = "long" if str(tr["side"]).upper() == "BUY" else "short"
+                    out.append(
+                        {
+                            "id": f"paper-{tr['id']}",
+                            "symbol": tr["symbol"],
+                            "side": side,
+                            "quantity": float(tr["quantity"]),
+                            "entry_price": entry,
+                            "current_price": current_price,
+                            "pnl": pnl,
+                            "pnl_percent": pnl_percent,
+                            "test_mode": True,
+                            "opened_at": tr["opened_at"].isoformat() if hasattr(tr["opened_at"], "isoformat") else str(tr["opened_at"]),
+                        }
+                    )
+                return out
+            except Exception as e:
+                logger.warning(f"Fallback test_mode_trades due to: {e}")
+
         db = get_db()
-        
         try:
             with db.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -231,14 +315,14 @@ class TestModeService:
     @staticmethod
     def get_test_mode_logs(user_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         """
-        Obtém logs em modo teste
+        Get test mode logs.
         
         Args:
-            user_id: ID do usuário
-            limit: Limite de resultados
+            user_id: User ID
+            limit: Result limit
             
         Returns:
-            Lista de logs
+            Log list
         """
         db = get_db()
         
@@ -273,24 +357,63 @@ class TestModeService:
     @staticmethod
     def get_agent_status(user_id: int) -> Dict[str, Any]:
         """
-        Obtém status do agente em modo teste
+        Get agent status in test mode.
         
         Args:
-            user_id: ID do usuário
+            user_id: User ID
             
         Returns:
-            Status do agente
+            Agent status
         """
         return {
             "agent_status": "stopped",
             "test_mode": True,
+            "wallet_mode": "mocked",
             "last_update": datetime.utcnow().isoformat(),
             "strategy": "moderate"
+        }
+
+    @staticmethod
+    def get_phase2_mocked_data(
+        user_id: int,
+        signals_limit: int = 100,
+        trades_limit: int = 200,
+        equity_limit: int = 500,
+    ) -> Dict[str, Any]:
+        """
+        Return full Phase 2 payload for mocked wallet:
+        portfolio, summary, positions, trades, signals, equity history.
+        """
+        if not TestModeService.is_mocked_mode_active(user_id):
+            raise ValueError("Test mode not connected")
+
+        psvc = get_portfolio_service()
+        repo = get_paper_repo()
+        paper_service = get_paper_trading_service()
+        # Ensure mocked portfolio is available
+        paper_service.ensure_portfolio(user_id, initial_balance=10000.0)
+
+        portfolio = psvc.get_portfolio(user_id)
+        summary = psvc.get_summary(user_id)
+        positions = psvc.list_positions(user_id)
+        trades = psvc.list_trades(user_id, limit=trades_limit)
+        signals = repo.list_signals(limit=signals_limit, user_id=user_id)
+        equity_history = psvc.equity_history(user_id, limit=equity_limit)
+
+        TestModeService.sync_mock_balance_from_paper(user_id)
+        return {
+            "wallet_mode": "mocked",
+            "portfolio": portfolio,
+            "summary": summary,
+            "positions": positions,
+            "trades": trades,
+            "signals": signals,
+            "equity_history": equity_history,
         }
     
     @staticmethod
     def _create_initial_trades(cur, user_id: int):
-        """Cria trades iniciais para demonstração"""
+        """Create initial demo trades."""
         symbols = ["BTC", "ETH", "AAPL"]
         quantities = [0.1, 2.5, 10]
         entry_prices = [45000.00, 2800.00, 175.50]
@@ -316,7 +439,7 @@ class TestModeService:
     
     @staticmethod
     def _create_initial_logs(cur, user_id: int):
-        """Cria logs iniciais para demonstração"""
+        """Create initial demo logs."""
         initial_logs = [
             {"level": "INFO", "message": "Test mode activated - Using demo data"},
             {"level": "INFO", "message": "Guard-rails configured for test symbols: BTC, ETH, AAPL"},
@@ -334,14 +457,14 @@ class TestModeService:
     @staticmethod
     def _simulate_price_change(symbol: str, base_price: float) -> float:
         """
-        Simula mudança de preço baseada em variação aleatória
+        Simulate a price move based on random variation.
         
         Args:
-            symbol: Símbolo do ativo
-            base_price: Preço base
+            symbol: Asset symbol
+            base_price: Base price
             
         Returns:
-            Novo preço simulado
+            New simulated price
         """
         variation = random.uniform(-TestModeService.PRICE_VARIATION, TestModeService.PRICE_VARIATION)
         new_price = base_price * (1 + variation)

@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FInsight - Paper Trading</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7edf4;
+      --muted: #8b9cb3;
+      --border: #2d3a4d;
+      --accent: #3d8bfd;
+      --pos: #2ecc71;
+      --neg: #e74c3c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      justify-content: space-between;
+    }
+    h1 { font-size: 1.25rem; font-weight: 600; margin: 0; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    label { font-size: 0.85rem; color: var(--muted); }
+    input[type="number"] {
+      width: 5rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+    }
+    button {
+      padding: 0.45rem 0.9rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button.primary { background: var(--accent); border-color: #2f6fc9; color: #fff; }
+    button:hover { filter: brightness(1.08); }
+    main { padding: 1rem 1.5rem 2rem; max-width: 1280px; margin: 0 auto; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+    }
+    .card h3 {
+      margin: 0 0 0.35rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .card .val { font-size: 1.35rem; font-weight: 600; }
+    .chart-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.25rem;
+      height: 320px;
+    }
+    section h2 {
+      font-size: 1rem;
+      margin: 0 0 0.75rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 1.25rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.55rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 500; }
+    tr:last-child td { border-bottom: none; }
+    .num { font-variant-numeric: tabular-nums; }
+    .pos { color: var(--pos); }
+    .neg { color: var(--neg); }
+    .err {
+      background: #3d2020;
+      border: 1px solid var(--neg);
+      color: #f5c4c4;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .err.show { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FInsight - Paper Trading</h1>
+    <div class="toolbar">
+      <div>
+        <label for="uid">user_id</label>
+        <input id="uid" type="number" min="1" value="1" />
+      </div>
+      <button type="button" class="primary" id="btnLoad">Load</button>
+      <button type="button" id="btnSeed">Seed 10k</button>
+      <button type="button" id="btnReset">Reset</button>
+    </div>
+  </header>
+  <main>
+    <div id="err" class="err"></div>
+    <div class="grid" id="kpis"></div>
+    <div class="chart-wrap">
+      <canvas id="eqChart"></canvas>
+    </div>
+    <section>
+      <h2>Open Positions</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Qtd</th>
+            <th>Avg Entry</th>
+            <th>Current Price</th>
+            <th>Unrealized PnL</th>
+          </tr>
+        </thead>
+        <tbody id="tbPos"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Trade History</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Lado</th>
+            <th>Qtd</th>
+            <th>Entrada</th>
+            <th>Exit</th>
+            <th>Realizado</th>
+            <th>Status</th>
+            <th>Opened At</th>
+          </tr>
+        </thead>
+        <tbody id="tbTrades"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Signal History</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Tipo</th>
+            <th>Price</th>
+            <th>Conf.</th>
+            <th>Created At</th>
+          </tr>
+        </thead>
+        <tbody id="tbSig"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const api = (path, opts = {}) =>
+      fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+
+    function showErr(msg) {
+      const e = $("err");
+      e.textContent = msg;
+      e.classList.add("show");
+    }
+    function clearErr() {
+      $("err").classList.remove("show");
+    }
+
+    function fmtMoney(n) {
+      if (n == null || Number.isNaN(n)) return "—";
+      return Number(n).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+    function fmtPct(n) {
+      if (n == null || Number.isNaN(n)) return "—";
+      return Number(n).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }) + "%";
+    }
+    function clsPnL(n) {
+      if (n == null || Number.isNaN(n)) return "num";
+      const v = Number(n);
+      if (v > 0) return "num pos";
+      if (v < 0) return "num neg";
+      return "num";
+    }
+
+    let chart;
+
+    function renderKpis(s) {
+      const cards = [
+        ["Initial Balance", fmtMoney(s.initial_balance)],
+        ["Current Cash", fmtMoney(s.current_cash)],
+        ["Total Equity", fmtMoney(s.total_equity)],
+        ["Return", fmtPct(s.total_return_pct)],
+        ["Trades (Total)", String(s.total_trades)],
+        ["Win rate", fmtPct(s.win_rate)],
+      ];
+      $("kpis").innerHTML = cards
+        .map(
+          ([t, v]) =>
+            `<div class="card"><h3>${t}</h3><div class="val">${v}</div></div>`
+        )
+        .join("");
+    }
+
+    function renderChart(points) {
+      const ctx = $("eqChart").getContext("2d");
+      const labels = points.map((p) =>
+        new Date(p.recorded_at).toLocaleString("pt-BR")
+      );
+      const data = points.map((p) => Number(p.equity));
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Equity",
+              data,
+              borderColor: "#3d8bfd",
+              backgroundColor: "rgba(61,139,253,0.1)",
+              fill: true,
+              tension: 0.2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 8, color: "#8b9cb3" } },
+            y: { ticks: { color: "#8b9cb3" } },
+          },
+        },
+      });
+    }
+
+    async function loadAll() {
+      clearErr();
+      const uid = Number($("uid").value);
+      if (!uid) {
+        showErr("Enter a valid user_id (the user must exist in the users table).");
+        return;
+      }
+      try {
+        const sum = await api(`/api/paper/portfolio/${uid}/summary`).then((r) => {
+          if (!r.ok) throw new Error(await r.text());
+          return r.json();
+        });
+        renderKpis(sum);
+
+        const eq = await api(
+          `/api/paper/portfolio/${uid}/equity-history?limit=500`
+        ).then((r) => {
+          if (!r.ok) throw new Error(await r.text());
+          return r.json();
+        });
+        renderChart(eq.length ? eq : [{ recorded_at: new Date().toISOString(), equity: sum.total_equity }]);
+
+        const pos = await api(`/api/paper/portfolio/${uid}/positions`).then((r) => {
+          if (!r.ok) throw new Error(await r.text());
+          return r.json();
+        });
+        $("tbPos").innerHTML = pos
+          .map(
+            (p) =>
+              `<tr>
+              <td>${p.symbol}</td>
+              <td class="num">${fmtMoney(p.quantity)}</td>
+              <td class="num">${fmtMoney(p.avg_entry_price)}</td>
+              <td class="num">${fmtMoney(p.current_price)}</td>
+              <td class="${clsPnL(p.unrealized_pnl)}">${fmtMoney(p.unrealized_pnl)}</td>
+            </tr>`
+          )
+          .join("") || `<tr><td colspan="5">No open positions</td></tr>`;
+
+        const tr = await api(`/api/paper/portfolio/${uid}/trades?limit=100`).then(
+          (r) => {
+            if (!r.ok) throw new Error(await r.text());
+            return r.json();
+          }
+        );
+        $("tbTrades").innerHTML = tr
+          .map(
+            (t) =>
+              `<tr>
+              <td>${t.symbol}</td>
+              <td>${t.side}</td>
+              <td class="num">${fmtMoney(t.quantity)}</td>
+              <td class="num">${fmtMoney(t.entry_price)}</td>
+              <td class="num">${t.exit_price != null ? fmtMoney(t.exit_price) : "—"}</td>
+              <td class="${clsPnL(t.realized_pnl)}">${t.realized_pnl != null ? fmtMoney(t.realized_pnl) : "—"}</td>
+              <td>${t.status}</td>
+              <td>${new Date(t.opened_at).toLocaleString("pt-BR")}</td>
+            </tr>`
+          )
+          .join("") || `<tr><td colspan="8">No trades</td></tr>`;
+
+        const sig = await api(`/api/paper/signals?limit=50`).then((r) => {
+          if (!r.ok) throw new Error(await r.text());
+          return r.json();
+        });
+        $("tbSig").innerHTML = sig
+          .map(
+            (s) =>
+              `<tr>
+              <td>${s.symbol}</td>
+              <td>${s.signal_type}</td>
+              <td class="num">${fmtMoney(s.signal_price)}</td>
+              <td class="num">${s.confidence_score != null ? s.confidence_score : "—"}</td>
+              <td>${new Date(s.created_at).toLocaleString("pt-BR")}</td>
+            </tr>`
+          )
+          .join("") || `<tr><td colspan="5">No signals</td></tr>`;
+      } catch (e) {
+        showErr(String(e.message || e));
+      }
+    }
+
+    $("btnLoad").onclick = loadAll;
+    $("btnSeed").onclick = async () => {
+      clearErr();
+      const uid = Number($("uid").value);
+      try {
+        const r = await api(`/api/paper/simulation/${uid}/seed-balance`, {
+          method: "POST",
+          body: JSON.stringify({ initial_balance: 10000 }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        await loadAll();
+      } catch (e) {
+        showErr(String(e.message || e));
+      }
+    };
+    $("btnReset").onclick = async () => {
+      clearErr();
+      const uid = Number($("uid").value);
+      try {
+        const r = await api(`/api/paper/simulation/${uid}/reset`, {
+          method: "POST",
+          body: JSON.stringify({ initial_balance: 10000 }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        await loadAll();
+      } catch (e) {
+        showErr(String(e.message || e));
+      }
+    };
+
+    loadAll();
+  </script>
+</body>
+</html>
