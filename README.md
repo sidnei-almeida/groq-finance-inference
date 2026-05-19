@@ -18,6 +18,7 @@
 **Production-grade FastAPI backend:** **30+ quantitative metrics**, **yfinance** market data, and **Atlas** — a Groq-powered analyst that turns numbers into narrative risk/return insight. Includes **JWT auth**, **encrypted exchange credentials**, and **Phase 2 paper trading** with a built-in dashboard.
 
 [Repository analysis](#repository-analysis) ·
+[Gallery](#gallery) ·
 [Features](#features) ·
 [Architecture](#architecture) ·
 [Quick start](#quick-start) ·
@@ -33,6 +34,7 @@
 ## Table of contents
 
 - [Overview](#overview)
+- [Gallery](#gallery)
 - [Repository analysis](#repository-analysis)
 - [Features](#features)
 - [Architecture](#architecture)
@@ -56,6 +58,27 @@
 ### Why Groq here?
 
 Groq’s **LPU** inference stack keeps latency low for interactive “analyze + explain” flows, so `POST /api/analyze` can return both JSON metrics and a readable report in one round-trip.
+
+---
+
+## Gallery
+
+<p align="center">
+  <table>
+    <tr>
+      <td align="center" valign="top" width="50%">
+        <img src="images/software1.png" alt="FinSight API — Swagger / docs or dashboard (1)" width="450" />
+      </td>
+      <td align="center" valign="top" width="50%">
+        <img src="images/software2.png" alt="FinSight API — metrics, paper trading, or second view (2)" width="450" />
+      </td>
+    </tr>
+  </table>
+</p>
+
+<p align="center">
+  <em><strong>Figure 1.</strong> Left: OpenAPI/Swagger or primary UI. Right: analysis, paper dashboard, or complementary view — files <code>images/software1.png</code> and <code>images/software2.png</code>.</em>
+</p>
 
 ---
 
@@ -352,10 +375,10 @@ This project is licensed under the **MIT License** — add a `LICENSE` file in t
 | File | Role |
 |------|------|
 | `images/header.png` | **README hero banner** (principal arte do projeto). |
+| `images/software1.png` · `images/software2.png` | **Gallery** — dois screenshots lado a lado (secção [Gallery](#gallery)). |
 | `images/architecture.svg` | Diagrama de fluxo / camadas (serviços, DB, Groq). |
-| `images/software1.png` · `images/software2.png` | Screenshots opcionais (ex.: Swagger, dashboard) — liga no README se quiseres uma galeria. |
 
-O ficheiro `banner.svg` foi removido: o **header PNG** é o banner oficial; evita duplicar identidade visual.
+O **header PNG** é o banner oficial no topo; não é necessário outro ficheiro de banner.
 
 ---
 
