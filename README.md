@@ -1,545 +1,368 @@
-# FinSight API
+<a id="top"></a>
 
 <div align="center">
 
-![Python](https://img.shields.io/badge/Python-3.11-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Render](https://img.shields.io/badge/Deploy-Render-46a3b3.svg)
+<img src="images/header.png" alt="FinSight API — banner" width="100%"/>
 
-**Enterprise-grade quantitative portfolio analysis API powered by AI**
+<br/>
 
-[Features](#-features) • [Quick Start](#-quick-start) • [API Documentation](#-api-documentation) • [Deployment](#-deployment) • [Security](#-security)
+# FinSight API · Groq Finance Inference
+
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://neon.tech/)
+[![Groq](https://img.shields.io/badge/Groq-LPU_inference-f55036?style=flat-square)](https://groq.com/)
+[![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?style=flat-square&logo=render&logoColor=white)](https://render.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](#license)
+
+**Production-grade FastAPI backend:** **30+ quantitative metrics**, **yfinance** market data, and **Atlas** — a Groq-powered analyst that turns numbers into narrative risk/return insight. Includes **JWT auth**, **encrypted exchange credentials**, and **Phase 2 paper trading** with a built-in dashboard.
+
+[Repository analysis](#repository-analysis) ·
+[Features](#features) ·
+[Architecture](#architecture) ·
+[Quick start](#quick-start) ·
+[API](#api-surface) ·
+[Paper trading](#paper-trading--dashboard) ·
+[Security](#security) ·
+[Deploy](#deployment)
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## Table of contents
 
-- [Overview](#-overview)
-- [Features](#-features)
-- [Architecture](#-architecture)
-- [Tech Stack](#-tech-stack)
-- [Quick Start](#-quick-start)
-- [API Documentation](#-api-documentation)
-- [Database Schema](#-database-schema)
-- [Security](#-security)
-- [Deployment](#-deployment)
-- [Development](#-development)
-- [Contributing](#-contributing)
-- [License](#-license)
-
----
-
-## 🎯 Overview
-
-**FinSight API** is a production-ready FastAPI backend that provides sophisticated quantitative portfolio analysis with AI-powered insights. It combines rigorous financial mathematics with state-of-the-art language models to deliver actionable investment intelligence in milliseconds.
-
-### Key Capabilities
-
-- **31+ Advanced Metrics**: Comprehensive risk and performance analysis including Sharpe, Sortino, VaR, CVaR, Tail Risk, and more
-- **AI-Powered Analysis**: Atlas AI agent interprets complex metrics and provides natural language insights using Groq's ultra-fast LLM inference
-- **Thin Client Architecture**: Stateless API design with all state persisted in PostgreSQL
-- **Enterprise Security**: AES-256 encryption for sensitive credentials, secure credential management
-- **Production Ready**: Optimized for cloud deployment with health checks, monitoring, and auto-scaling support
+- [Overview](#overview)
+- [Repository analysis](#repository-analysis)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Quick start](#quick-start)
+- [API surface](#api-surface)
+- [Paper trading & dashboard](#paper-trading--dashboard)
+- [Database](#database)
+- [Security](#security)
+- [Deployment](#deployment)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## ✨ Features
+## Overview
 
-### Quantitative Analysis Engine
+**FinSight API** (`groq-finance-inference`) is a stateless **thin-client** backend: UIs or scripts call REST endpoints; **PostgreSQL** holds users, analyses, trades, logs, and paper-trading state. The **QuantitativeEngine** computes portfolio statistics from historical prices; **AtlasAgent** calls the **Groq** API (e.g. Llama 3.3 70B Versatile) to produce natural-language analysis aligned with those metrics.
 
-- **Risk Metrics**: Maximum Drawdown, Value at Risk (VaR), Conditional VaR (CVaR), Downside Deviation
-- **Performance Metrics**: Sharpe Ratio, Sortino Ratio, Calmar Ratio, Win Rate
-- **Distribution Analysis**: Skewness, Kurtosis, Tail Risk Assessment
-- **Diversification Metrics**: Correlation Matrix, Portfolio Concentration (HHI), Beta Analysis
-- **Optimization**: Efficient Frontier Analysis, Minimum Variance Portfolio
+### Why Groq here?
 
-### AI-Powered Insights
-
-- **Atlas AI Agent**: Specialized financial analyst persona with expertise in tail risk and distribution analysis
-- **Sub-second Inference**: Powered by Groq's LPU technology for real-time analysis
-- **Natural Language Reports**: Comprehensive portfolio insights in plain English
-- **Risk Interpretation**: Identifies hidden risks that standard metrics miss
-
-### Architecture & Infrastructure
-
-- **Thin Client Design**: Frontend queries API, all state in database
-- **Stateless API**: Horizontally scalable, cloud-native architecture
-- **Connection Pooling**: Optimized database connections for high throughput
-- **Performance Indexes**: 15+ database indexes for sub-100ms query times
+Groq’s **LPU** inference stack keeps latency low for interactive “analyze + explain” flows, so `POST /api/analyze` can return both JSON metrics and a readable report in one round-trip.
 
 ---
 
-## 🏗️ Architecture
+## Repository analysis
 
+| Metric | Detail |
+|--------|--------|
+| **Python codebase** | ~**7.1k** lines across `app/`, tests, and scripts (excluding `.venv`). |
+| **`app/` package** | **22** Python modules — single FastAPI app in `main.py` (~**1.8k** lines) plus services, API routers, schemas, repositories, and static dashboard. |
+| **Entry** | `app.main:app` — Uvicorn / Render `startCommand`. |
+| **Largest domains** | Portfolio analysis + AI (`quant_engine.py`, `ai_agent.py`), persistence (`database.py`), paper trading (`paper_trading_service.py`, `api/paper_trading.py`), auth (`auth.py`), test/mocked flows (`test_mode.py`). |
+| **Frontend in repo** | `app/static/dashboard.html` — served at **`/paper-dashboard`**. |
+| **Docs on disk** | `README.md`, `DEPLOY.md`, `SECURITY.md`, **`PAPER_TRADING.md`** (Phase 2). There is **no** separate `docs/` folder; schema setup lives in code (`database.py`). |
+
+<p align="center">
+  <img src="images/architecture.svg" alt="Architecture: client → FastAPI → services → PostgreSQL, yfinance, Groq" width="95%"/>
+</p>
+
+---
+
+## Features
+
+### Quantitative engine
+
+Risk and performance metrics (Sharpe, Sortino, Calmar, drawdown, VaR/CVaR, skew/kurtosis/tail risk, correlation, HHI, efficient-frontier style analysis, etc.) computed in **`QuantitativeEngine`** using **pandas** / **numpy** / **scipy** and **yfinance** data.
+
+### Atlas AI (Groq)
+
+**`AtlasAgent`** formats metrics for an LLM and returns structured narrative analysis. Models are auto-selected (preference list includes `llama-3.3-70b-versatile`) with fallbacks if a model is unavailable.
+
+### Authentication
+
+**JWT**-based auth: `POST /api/auth/signup`, `POST /api/auth/login`, `POST /api/auth/logout`, profile update, password change, avatar upload — see OpenAPI under **`/docs`**.
+
+### Exchange & agent (config layer)
+
+Endpoints to **connect exchange** (credentials encrypted with **Fernent/AES-256**-style pipeline via `SecurityService`), **guardrails**, **strategy** presets, and **agent control** — persisted via DB config and logs.
+
+### Paper trading (Phase 2)
+
+User-scoped **simulation**: portfolio, positions, trades, signals, equity history. Routes under **`/api/paper/...`**; mocked wallet mode under **`/api/test-mode/paper-...`**. Full notes in **`PAPER_TRADING.md`**.
+
+### Observability
+
+Health: **`GET /api/health`**. Structured logging across services; bot/analysis logs queryable from the API.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph clients["Clients"]
+    WEB["Web / GitHub Pages"]
+    DASH["Paper dashboard HTML"]
+    CLI["Scripts / curl"]
+  end
+  subgraph api["FastAPI"]
+    R["Routes: auth, analyze, exchange, agent, paper, test-mode"]
+  end
+  subgraph services["Services"]
+    Q["QuantitativeEngine"]
+    A["AtlasAgent → Groq"]
+    P["PaperTrading / Portfolio"]
+    DB["Database service"]
+  end
+  subgraph external["External"]
+    YF["yfinance"]
+    GROQ["Groq API"]
+    PG[("PostgreSQL")]
+  end
+  clients --> R
+  R --> Q & A & P & DB
+  Q --> YF
+  A --> GROQ
+  P --> PG
+  DB --> PG
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend Layer                        │
-│              (Thin Client - React/Vue/Angular)              │
-└───────────────────────┬─────────────────────────────────────┘
-                        │ HTTPS/REST API
-                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    FastAPI Application                       │
-│                  (Stateless - Horizontally Scalable)         │
-└───────┬───────────────────┬───────────────────┬────────────┘
-        │                   │                   │
-        ▼                   ▼                   ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  PostgreSQL  │   │ Quantitative │   │  Atlas AI    │
-│   (Neon)     │   │    Engine    │   │   (Groq)     │
-│              │   │              │   │              │
-│ • Analyses   │   │ • 31+ Metrics│   │ • LLM 3.3    │
-│ • Trades     │   │ • Risk Calc  │   │ • Insights   │
-│ • Logs       │   │ • Portfolio  │   │ • Reports    │
-│ • Config     │   │ • Optimization│   │              │
-└──────────────┘   └──────────────┘   └──────────────┘
-```
 
-### Data Flow
+**Data path for a typical analysis**
 
-1. **Client Request** → FastAPI receives HTTP request
-2. **Quantitative Analysis** → Engine fetches market data, calculates metrics
-3. **AI Processing** → Atlas AI interprets metrics, generates insights
-4. **Database Persistence** → Results stored in PostgreSQL
-5. **Response** → JSON response with metrics and AI analysis
+1. Client sends symbols, weights, period, `include_ai_analysis`.
+2. Engine pulls history and computes metrics.
+3. If requested, Atlas calls Groq and attaches text.
+4. Result persisted (`portfolio_analyses` / logs) and returned as JSON.
 
 ---
 
-## 🛠️ Tech Stack
+## Tech stack
 
-| Category | Technology | Version |
-|----------|-----------|---------|
-| **Framework** | FastAPI | 0.104+ |
-| **ASGI Server** | Uvicorn | Standard |
-| **Database** | PostgreSQL (Neon) | Latest |
-| **ORM/Driver** | psycopg2 | 2.9.9+ |
-| **AI/LLM** | Groq (Llama 3.3) | 70B Versatile |
-| **Data Science** | pandas, numpy, scipy | Latest |
-| **Finance Data** | yfinance | 0.2.28+ |
-| **Security** | cryptography (Fernet) | 41.0+ |
-| **Deployment** | Render.com | - |
+| Layer | Technology |
+|-------|------------|
+| API | **FastAPI**, **Uvicorn**, **Pydantic** |
+| DB | **PostgreSQL** via **psycopg2**, connection helpers in `database.py` |
+| AI | **groq** SDK, Groq Cloud models (Llama 3.x family) |
+| Quant | **pandas**, **numpy**, **scipy**, **yfinance** |
+| Security | **cryptography** (Fernet), **bcrypt**, **python-jose** / **PyJWT** |
+| Deploy | **Render** (`render.yaml`), `runtime.txt` → Python **3.11** |
 
 ---
 
-## 🚀 Quick Start
+## Quick start
 
 ### Prerequisites
 
-- Python 3.11+
-- PostgreSQL database (Neon recommended)
-- Groq API key ([Get one here](https://console.groq.com))
+- **Python 3.11+**
+- **PostgreSQL** connection string (e.g. **Neon**)
+- **Groq API key** — [console.groq.com](https://console.groq.com)
 
-### Installation
-
-#### 1. Clone Repository
+### Install
 
 ```bash
-git clone https://github.com/yourusername/groq-finance-inference.git
+git clone https://github.com/YOUR_USERNAME/groq-finance-inference.git
 cd groq-finance-inference
-```
-
-#### 2. Create Virtual Environment
-
-```bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-#### 3. Install Dependencies
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-#### 4. Configure Environment
+### Environment
 
-Create a `.env` file in the root directory:
+Create `.env` in the project root:
 
 ```bash
-# Database Connection
-DATABASE_URL=postgresql://user:password@host:port/database?sslmode=require
-
-# Groq API Key
-GROQ_API_KEY=gsk_your_groq_api_key_here
-
-# Encryption Key (CRITICAL - Generate a new unique key!)
-ENCRYPTION_KEY=your-super-secret-encryption-key-minimum-32-characters
+DATABASE_URL=postgresql://user:password@host:5432/db?sslmode=require
+GROQ_API_KEY=gsk_...
+ENCRYPTION_KEY=   # generate a strong key — see SECURITY.md
 ```
 
-**Generate Encryption Key:**
+Generate encryption key (example using the app’s security helper):
+
 ```bash
 python3 -c "from app.services.security import SecurityService; print(SecurityService.generate_encryption_key())"
 ```
 
-#### 5. Run Development Server
+### Run locally
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-#### 6. Access API
+| URL | Description |
+|-----|-------------|
+| [http://localhost:8000/docs](http://localhost:8000/docs) | Swagger UI |
+| [http://localhost:8000/redoc](http://localhost:8000/redoc) | ReDoc |
+| [http://localhost:8000/api/health](http://localhost:8000/api/health) | Health check |
+| [http://localhost:8000/paper-dashboard](http://localhost:8000/paper-dashboard) | Paper trading dashboard (static) |
 
-- **API Base URL**: https://groq-finance-inference.onrender.com
-- **Interactive Docs**: https://groq-finance-inference.onrender.com/docs
-- **ReDoc**: https://groq-finance-inference.onrender.com/redoc
-- **Health Check**: https://groq-finance-inference.onrender.com/api/health
+**Production (example):** `https://groq-finance-inference.onrender.com` — same paths.
 
 ---
 
-## 📚 API Documentation
+## API surface
 
-### Base URL
+> Full list and schemas: **`/docs`** (OpenAPI 3).
 
-```
-Production: https://groq-finance-inference.onrender.com
-Development: http://localhost:8000
-```
+### Highlights
 
-### Authentication
+| Area | Prefix / endpoints |
+|------|-------------------|
+| **Analysis** | `POST /api/analyze`, `GET /api/analyses`, `GET /api/analyses/{id}`, logs |
+| **Auth** | `/api/auth/signup`, `/api/auth/login`, `/api/auth/logout`, `/api/auth/me`, profile & avatar |
+| **Exchange** | `/api/exchange/connect`, `status`, `disconnect` |
+| **Risk / strategy** | `/api/guardrails`, `/api/strategy` |
+| **Agent** | `/api/agent/control`, `/api/agent/status` |
+| **Trades / logs / portfolio** | `/api/trades`, `/api/logs`, `/api/portfolio/history` |
+| **Test mode** | `/api/test-mode/*` (mocked wallet, optional auth) |
+| **Paper trading** | `/api/paper/*` — see below |
+| **Health** | `GET /api/health` |
 
-Currently, the API uses environment-based authentication. JWT authentication is planned for future releases.
+### Example — portfolio analysis
 
-### Endpoints
-
-#### Portfolio Analysis
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/analyze` | Analyze portfolio with 31+ metrics + AI insights |
-| `GET` | `/api/analyses` | Get recent portfolio analyses |
-| `GET` | `/api/analyses/{id}` | Get specific analysis by ID |
-| `GET` | `/api/analyses/{id}/logs` | Get logs for specific analysis |
-
-**Example Request:**
 ```bash
-# Production
-curl -X POST "https://groq-finance-inference.onrender.com/api/analyze" \
+curl -s -X POST "http://localhost:8000/api/analyze" \
   -H "Content-Type: application/json" \
   -d '{
-    "symbols": ["AAPL", "TSLA", "MSFT"],
-    "weights": [0.4, 0.3, 0.3],
-    "period": "1y",
-    "include_ai_analysis": true
-  }'
-
-# Development (local)
-curl -X POST "http://localhost:8000/api/analyze" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "symbols": ["AAPL", "TSLA", "MSFT"],
-    "weights": [0.4, 0.3, 0.3],
+    "symbols": ["AAPL", "MSFT", "GOOGL"],
+    "weights": [0.34, 0.33, 0.33],
     "period": "1y",
     "include_ai_analysis": true
   }'
 ```
 
-**Example Response:**
-```json
-{
-  "analysis_id": 1,
-  "symbols": ["AAPL", "TSLA", "MSFT"],
-  "weights": [0.4, 0.3, 0.3],
-  "period": "1y",
-  "metrics": {
-    "annual_return": 20.56,
-    "volatility": 32.42,
-    "sharpe_ratio": 0.51,
-    "max_drawdown": 30.81,
-    "var_95_annualized": 43.88,
-    "skewness": 1.418,
-    "kurtosis": 14.844
-  },
-  "ai_analysis": "Atlas AI analysis text...",
-  "status": "COMPLETED",
-  "created_at": "2024-01-11T12:00:00Z"
-}
-```
+---
 
-#### Exchange Connection
+## Paper trading & dashboard
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/exchange/connect` | Connect to exchange (credentials encrypted) |
-| `GET` | `/api/exchange/status` | Get connection status |
-| `POST` | `/api/exchange/disconnect` | Disconnect and delete credentials |
-
-#### Risk Management
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/guardrails` | Set risk limits (stop loss, leverage, etc.) |
-| `GET` | `/api/guardrails` | Get current guard-rails configuration |
-
-#### Strategy Configuration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/strategy` | Set trading strategy (conservative/aggressive) |
-| `GET` | `/api/strategy` | Get current strategy configuration |
-
-#### Agent Control
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/agent/control` | Start/stop/emergency stop agent |
-| `GET` | `/api/agent/status` | Get agent status and system information |
-
-#### Monitoring (Thin Client)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/trades` | Get all trades (filter by status) |
-| `GET` | `/api/trades/open` | Get open trades only |
-| `GET` | `/api/logs` | Get system logs (filter by level) |
-| `GET` | `/api/portfolio/history` | Get portfolio history for charts |
-
-### Interactive Documentation
-
-Full interactive API documentation is available at:
-- **Swagger UI**: `/docs`
-- **ReDoc**: `/redoc`
+- **Dashboard UI:** **`GET /paper-dashboard`** serves `app/static/dashboard.html`.
+- **REST API:** router prefix **`/api/paper`** (portfolio, signals, simulation, equity history).
+- **Mocked integration:** when test mode is active, **`/api/test-mode/paper-*`** endpoints drive the same paper engine (see **`PAPER_TRADING.md`** for curl examples and flows).
 
 ---
 
-## 💾 Database Schema
+## Database
 
-### Core Tables
+Tables are created/ migrated in **`app/services/database.py`** (`_initialize_tables`): e.g. users/sessions, `portfolio_analyses`, encrypted credentials, trades, logs, and **`paper_*`** entities for simulation.
 
-#### `portfolio_analyses`
-Stores complete portfolio analysis results with metrics and AI insights.
+There is **no** separate `docs/DATABASE.md` in this repo — refer to **`database.py`** and **`PAPER_TRADING.md`** for table behavior.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | SERIAL | Primary key |
-| `symbols` | TEXT[] | Array of asset symbols |
-| `weights` | NUMERIC[] | Portfolio weights |
-| `period` | VARCHAR(20) | Analysis period |
-| `metrics` | JSONB | All 31+ quantitative metrics |
-| `ai_analysis` | TEXT | Atlas AI analysis text |
-| `status` | VARCHAR(20) | Analysis status |
-| `created_at` | TIMESTAMPTZ | Creation timestamp |
-
-#### `encrypted_credentials`
-Stores encrypted exchange API credentials.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | SERIAL | Primary key |
-| `exchange` | VARCHAR(50) | Exchange name |
-| `credential_type` | VARCHAR(20) | Type (api_key, api_secret) |
-| `encrypted_value` | TEXT | AES-256 encrypted value |
-| `created_at` | TIMESTAMPTZ | Creation timestamp |
-
-#### `trades`
-Trading history and positions.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | SERIAL | Primary key |
-| `symbol` | VARCHAR(20) | Trading symbol |
-| `side` | VARCHAR(10) | BUY or SELL |
-| `quantity` | NUMERIC(20,8) | Trade quantity |
-| `entry_price` | NUMERIC(20,8) | Entry price |
-| `exit_price` | NUMERIC(20,8) | Exit price (nullable) |
-| `pnl` | NUMERIC(20,2) | Profit/Loss |
-| `status` | VARCHAR(20) | OPEN, CLOSED, FAILED |
-| `entry_time` | TIMESTAMPTZ | Entry timestamp |
-| `exit_time` | TIMESTAMPTZ | Exit timestamp (nullable) |
-
-### Performance Optimization
-
-- **15+ Performance Indexes**: Optimized for common query patterns
-- **GIN Indexes**: Fast array searches on symbols
-- **Composite Indexes**: Multi-column queries optimized
-- **Connection Pooling**: Efficient database connection management
-
-See [Database Schema Documentation](./docs/DATABASE.md) for complete details.
+**Performance:** indexes and pooling are used for common read paths (see code comments in `database.py`).
 
 ---
 
-## 🔒 Security
+## Security
 
-FinSight API implements enterprise-grade security measures:
-
-### Implemented Security Features
-
-- ✅ **AES-256 Encryption**: All API keys encrypted before storage
-- ✅ **Separate Credentials Table**: Sensitive data isolated
-- ✅ **Log Masking**: Sensitive data masked in logs
-- ✅ **HTTPS Enforcement**: SSL/TLS required in production
-- ✅ **Environment Variables**: Secrets never in code
-- ✅ **Input Validation**: Pydantic models validate all inputs
-
-### Security Best Practices
-
-- 🔐 Generate unique `ENCRYPTION_KEY` for each deployment
-- 🔐 Use HTTPS in production (automatic on Render)
-- 🔐 Store all secrets in environment variables
-- 🔐 Regularly rotate encryption keys
-- 🔐 Monitor access logs for suspicious activity
-
-**📖 For detailed security documentation, see [SECURITY.md](./SECURITY.md)**
+- **Secrets** only via environment variables on Render/local `.env`.
+- **API keys** encrypted at rest; sensitive values masked in logs.
+- **HTTPS** in production (Render).
+- Details: **[SECURITY.md](./SECURITY.md)**.
 
 ---
 
-## 🚀 Deployment
+## Deployment
 
-### Render.com (Recommended)
+Render is first-class: **`render.yaml`** + **`DEPLOY.md`**. Minimum env vars:
 
-FinSight API is optimized for deployment on Render.com.
+- `DATABASE_URL`
+- `GROQ_API_KEY`
+- `ENCRYPTION_KEY`
 
-**Quick Deploy:**
-1. Push code to GitHub
-2. Connect repository to Render
-3. Configure environment variables
-4. Deploy!
-
-**📖 Complete deployment guide: [DEPLOY.md](./DEPLOY.md)**
-
-### Environment Variables
-
-Required environment variables for production:
-
-```bash
-DATABASE_URL=postgresql://...          # PostgreSQL connection string
-GROQ_API_KEY=gsk_...                   # Groq API key
-ENCRYPTION_KEY=...                     # Encryption key (generate new!)
-```
-
-### Health Checks
-
-The API includes a health check endpoint for monitoring:
-
-```bash
-GET /api/health
-```
-
-Returns:
-```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "timestamp": "2024-01-11T12:00:00Z"
-}
-```
+Health check path: **`/api/health`**.
 
 ---
 
-## 💻 Development
+## Development
 
-### Project Structure
+### Layout (abridged)
 
 ```
 groq-finance-inference/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                    # FastAPI application & routes
-│   └── services/
-│       ├── __init__.py
-│       ├── quant_engine.py        # Quantitative analysis engine
-│       ├── ai_agent.py            # Atlas AI agent (Groq)
-│       ├── database.py           # Database service & connection pool
-│       └── security.py           # Encryption & security utilities
-├── requirements.txt               # Python dependencies
-├── render.yaml                    # Render deployment configuration
-├── runtime.txt                    # Python version specification
-├── .renderignore                  # Files ignored in Render builds
-├── README.md                      # This file
-├── DEPLOY.md                      # Deployment guide
-└── SECURITY.md                    # Security documentation
+│   ├── main.py                 # FastAPI app, most routes
+│   ├── api/
+│   │   └── paper_trading.py    # /api/paper router
+│   ├── core/
+│   ├── models/                 # SQLAlchemy-style models / paper models
+│   ├── repositories/
+│   ├── schemas/
+│   ├── services/
+│   │   ├── ai_agent.py         # Atlas + Groq
+│   │   ├── quant_engine.py
+│   │   ├── database.py
+│   │   ├── auth.py
+│   │   ├── security.py
+│   │   ├── paper_trading_service.py
+│   │   ├── portfolio_service.py
+│   │   ├── test_mode.py
+│   │   └── ...
+│   └── static/
+│       └── dashboard.html
+├── test_api.py
+├── requirements.txt
+├── runtime.txt
+├── render.yaml
+├── README.md
+├── DEPLOY.md
+├── SECURITY.md
+├── PAPER_TRADING.md
+└── images/                     # README artwork (banner, architecture)
 ```
 
-### Running Tests
+### Tests
 
 ```bash
-# Install test dependencies
-pip install pytest pytest-cov httpx
-
-# Run tests
+pip install pytest httpx
 pytest
-
-# With coverage
-pytest --cov=app --cov-report=html
 ```
 
-### Code Quality
+---
 
-```bash
-# Format code
-black app/
+## Contributing
 
-# Lint code
-flake8 app/
-
-# Type checking
-mypy app/
-```
-
-### Development Workflow
-
-1. Create feature branch: `git checkout -b feature/amazing-feature`
-2. Make changes and test locally
-3. Run tests: `pytest`
-4. Commit: `git commit -m "Add amazing feature"`
-5. Push: `git push origin feature/amazing-feature`
-6. Create Pull Request
+1. Fork the repository  
+2. Create a branch (`feature/...`)  
+3. Add tests where relevant  
+4. Open a Pull Request  
 
 ---
 
-## 🤝 Contributing
+## License
 
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/AmazingFeature`)
-3. **Make your changes** with tests
-4. **Run tests** (`pytest`)
-5. **Commit changes** (`git commit -m 'Add AmazingFeature'`)
-6. **Push to branch** (`git push origin feature/AmazingFeature`)
-7. **Open a Pull Request**
-
-### Contribution Guidelines
-
-- Write clear, documented code
-- Add tests for new features
-- Follow PEP 8 style guide
-- Update documentation as needed
-- Ensure all tests pass
+This project is licensed under the **MIT License** — add a `LICENSE` file in the root if not already present, or see your organization’s default OSS policy.
 
 ---
 
-## 📄 License
+## Acknowledgments
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- [FastAPI](https://fastapi.tiangolo.com/) - Modern, fast web framework
-- [Groq](https://groq.com/) - Ultra-fast AI inference
-- [yfinance](https://github.com/ranaroussi/yfinance) - Yahoo Finance data
-- [Render](https://render.com/) - Cloud hosting platform
-- [Neon](https://neon.tech/) - Serverless PostgreSQL
+- [FastAPI](https://fastapi.tiangolo.com/) · [Groq](https://groq.com/) · [yfinance](https://github.com/ranaroussi/yfinance) · [Render](https://render.com/) · [Neon](https://neon.tech/)
 
 ---
 
-## 📧 Contact & Support
+## `images/` folder
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/groq-finance-inference/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/groq-finance-inference/discussions)
-- **Email**: your.email@example.com
+| File | Role |
+|------|------|
+| `images/header.png` | **README hero banner** (principal arte do projeto). |
+| `images/architecture.svg` | Diagrama de fluxo / camadas (serviços, DB, Groq). |
+| `images/software1.png` · `images/software2.png` | Screenshots opcionais (ex.: Swagger, dashboard) — liga no README se quiseres uma galeria. |
+
+O ficheiro `banner.svg` foi removido: o **header PNG** é o banner oficial; evita duplicar identidade visual.
 
 ---
 
 <div align="center">
 
-**Made with ❤️ for quantitative finance**
+**Made for quantitative finance & fast LLM inference**
 
-[⬆ Back to Top](#finsight-api)
+[⬆ Back to top](#top)
 
 </div>
